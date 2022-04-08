@@ -1,0 +1,442 @@
+        /*char* cmd;
+        int len;
+        const char **cmd_argv = zmalloc(mget_size + 1);
+        cmd_argv[0] = "MGET";
+        for (int i = 1; i < mget_size + 1; i++) {
+            sds key_placeholder = sdscatprintf(sdsnew(""),"%s",reply->element[j + i - 1]->str);
+            cmd_argv[i] = key_placeholder;
+            printf("[%d/%d] cmd_argv '%s' \n", j + i - 1,  reply->elements, cmd_argv[i]);
+            //total_strings_size += reply->element[i - 1]->len;
+        }
+        len = redisFormatCommandArgv(&cmd, mget_size + 1, cmd_argv, NULL);
+        benchmark("MGET", cmd, len);
+        //rep[reply_it] = redisCommand(c, cmd, cmd_argv);
+        if (rep[reply_it]->type == REDIS_REPLY_ERROR) {
+            printf("Error: %s\n", rep[reply_it]->str);
+            return -1;
+        } else if (rep[reply_it]->type != REDIS_REPLY_ARRAY) {
+            printf("Error: %s\n", rep[reply_it]->str);
+            return -1;
+        }
+
+        //printf(" cmd '%s'\n", cmd);
+        free(cmd);
+        zfree(cmd_argv);*/
+
+
+
+        for (int i = 0; i < mget_size; ++i) {
+            if (reply->element[j + i] == NULL) {
+                printf("reply->element[%ld] is null\n", j + i);
+            }
+            if (reply->element[j + i]->str == NULL) {
+                printf("reply->element[%ld]->str is null\n", j + i);
+            }
+            if (rep->element[i] == NULL) {
+            printf("rep->element[%ld] is null\n", i);
+            }
+            if (rep->element[i]->str == NULL) {
+                printf("rep->element[%ld] is null\n", i);
+            }
+
+            if (rep->element[i]->type == REDIS_REPLY_NIL) {
+                printf("not (nil) reply. continue\n");
+            }
+
+            //printf("[%d] '%s' val '%s' (len %d)\n", j + i, reply->element[j + i]->str, rep->element[i]->str, rep->element[i]->len);
+        }
+
+
+/*void redis_real_data_get_keys(const char* key_type)
+{
+    unsigned int i,j=0;char **str1;
+    redisContext *c = NULL; char *t;
+    redisReply *reply, *rep, *set_reply;
+    clock_t before, difference;
+    int sec;
+
+    //TODO this should be given via redis-benchmark args later
+    c = getRedisContext("172.17.0.3", 6381, config.hostsocket);
+    before = clock();
+    reply = redisCommand(c,"keys *");
+    if (reply != NULL) {
+        if (reply->type == REDIS_REPLY_ERROR) {
+            fprintf(stderr, "Node %s:%d replied with error:\n%s\n", config.hostip, config.hostport, reply->str);
+
+            freeReplyObject(reply);
+            redisFree(c);
+            exit(1);
+        }
+        //freeReplyObject(reply);
+        //return -1;
+    } else {
+         fprintf(stderr, "reply is null\n");
+         return -1;
+    }
+
+    difference = clock() - before;
+    sec = difference / CLOCKS_PER_SEC;
+    printf("done processed 'keys *' %d sec reply->elements %d\n", sec, reply->elements);
+
+    redisContext *ctx = getRedisContext(config.hostip, config.hostport, config.hostsocket);
+
+    int mget_size = 20;
+    config.requests = reply->elements - mget_size;
+    before = clock();
+    int not_string_keys = 0;
+    int string_keys = 0;
+    int hash_keys = 0;
+    int set_keys
+    while (j < reply->elements)
+    {
+        rep = redisCommand(c,"TYPE %s", reply->element[j]->str);
+
+        if (strcmp(rep->str, "string") == 0) {
+            string_keys++;
+            j++;
+            continue;
+        }
+        if (strcmp(rep->str, "hash") == 0) {
+            hash_keys++;
+            j++;
+            continue;
+        }
+        if (strcmp(rep->str, "set") == 0) {
+            set_keys++;
+            j++;
+            continue;
+        }
+        printf("[%d] key %s (reply type %d) type %s\n", j, reply->element[j]->str, reply->element[j]->type, rep->str);
+
+        j++;
+        freeReplyObject(rep);
+    }
+    printf("skipped %d string types\n", string_keys);
+    printf("skipped %d hash types\n", hash_keys);
+    return;
+
+    j = 0;
+    while (j + mget_size - 1 < reply->elements)
+    {
+        rep = redisCommand(c,"MGET %s %s %s %s %s %s %s %s %s %s \
+                                   %s %s %s %s %s %s %s %s %s %s", reply->element[j]->str,
+                                                                   reply->element[j + 1]->str,
+                                                                   reply->element[j + 2]->str,
+                                                                   reply->element[j + 3]->str,
+                                                                   reply->element[j + 4]->str,
+                                                                   reply->element[j + 5]->str,
+                                                                   reply->element[j + 6]->str,
+                                                                   reply->element[j + 7]->str,
+                                                                   reply->element[j + 8]->str,
+                                                                   reply->element[j + 9]->str,
+                                                                   reply->element[j + 10]->str,
+                                                                   reply->element[j + 11]->str,
+                                                                   reply->element[j + 12]->str,
+                                                                   reply->element[j + 13]->str,
+                                                                   reply->element[j + 14]->str,
+                                                                   reply->element[j + 15]->str,
+                                                                   reply->element[j + 16]->str,
+                                                                   reply->element[j + 17]->str,
+                                                                   reply->element[j + 18]->str,
+                                                                   reply->element[j + 19]->str);
+        if (rep->type == REDIS_REPLY_ERROR) {
+            printf("Error: %s\n", rep->str);
+            return -1;
+        } else if (rep->type != REDIS_REPLY_ARRAY) {
+            printf("Error: %s\n", rep->str);
+            return -1;
+        }
+
+        if (rep->elements != mget_size) {
+            fprintf(stderr, "rep->element is %d\n", rep->elements);
+            return -1;
+        }
+
+        char *cmd;
+        int len = 0;
+        for (int i = 0; i < mget_size; ++i) {
+            if (reply->element[j + i] == NULL) {
+                printf("reply->element[%d] is null\n", j + i);
+            }
+            if (reply->element[j + i]->str == NULL) {
+                printf("reply->element[%d]->str is null\n", j + i);
+            }
+            if (rep->element[i] == NULL) {
+                printf("rep->element[%d] is null\n", i);
+            }
+            if (rep->element[i]->str == NULL) {
+                printf("rep->element[%d] is null\n", i);
+            }
+
+            if (rep->element[i]->type == REDIS_REPLY_NIL) {
+                printf("not (nil) reply. continue\n");
+                not_string_keys++;
+                continue;
+            }
+
+            set_reply = redisCommand(ctx,"SET %s %s", reply->element[j + i]->str, rep->element[i]->str);
+            if (rep->type == REDIS_REPLY_ERROR) {
+                printf("Error: %s\n", rep->str);
+                return -1;
+            }
+            freeReplyObject(set_reply);
+        }
+
+        j = j + mget_size;
+        freeReplyObject(rep);
+    }
+
+    difference = clock() - before;
+    sec = difference / CLOCKS_PER_SEC;
+    printf("done processed %d gets in %d sec (skipped %d non string vals)\n", j, sec, not_string_keys);
+    freeReplyObject(reply);
+}*/
+
+
+
+
+
+
+} else if (!strcmp(argv[i], "--mdb-envname")) {
+            if (lastarg) goto invalid;
+            config.mdb_envname = strdup(argv[++i]);
+        }
+
+
+
+
+
+
+
+void get_keys_from_lmdb()
+{
+    int rc = 0;
+    MDB_env *env;
+    MDB_dbi dbi;
+    MDB_val key, data;
+    MDB_txn *txn;
+
+    rc = mdb_env_create(&env);
+    if (rc != MDB_SUCCESS) {
+        fprintf(stderr, "failed to create env. error %d %s\n", rc, mdb_strerror(rc));
+        return;
+    }
+    mdb_env_set_maxreaders(env, 1);
+    //mdb_env_set_mapsize(env,  1024 * 10485760);
+    mdb_env_set_mapsize(env, 4096 * 10485760);
+    //rc = mdb_env_open(env, config.mdb_envname, MDB_WRITEMAP | MDB_MAPASYNC /*|MDB_NOSYNC*/, 0664);
+    rc = mdb_env_open(env, config.mdb_envname, MDB_FIXEDMAP|MDB_NOSYNC /*|MDB_NOSYNC*/, 0664);
+    if (rc) {
+        fprintf(stderr, "mdb_env_open failed, error %d %s\n", rc, mdb_strerror(rc));
+        goto env_close;
+    }
+
+    rc = mdb_txn_begin(env, NULL, 0, &txn);
+    if (rc) {
+        fprintf(stderr, "mdb_txn_begin failed, error %d %s\n", rc, mdb_strerror(rc));
+        goto env_close;
+    }
+
+    mdb_dbi_open(txn, NULL, 0, &dbi);
+
+
+    MDB_cursor *cursor;
+    rc = mdb_txn_begin(env, NULL, MDB_RDONLY, &txn);
+    rc = mdb_cursor_open(txn, dbi, &cursor);
+    if (rc) {
+        fprintf(stderr, "mdb_cursor_open failed, error %d %s\n", rc, mdb_strerror(rc));
+        goto txn_abort;
+    }
+    printf("KEY\t\tVALUE\n");
+    printf("------------------------\n");
+    while ((rc = mdb_cursor_get(cursor, &key, &data, MDB_NEXT)) == 0) {
+        printf("key: %p %.*s, data: %p %.*s\n",
+        key.mv_data,  (int) key.mv_size,  (char *) key.mv_data,
+        data.mv_data, (int) data.mv_size, (char *) data.mv_data);
+    }
+    mdb_cursor_close(cursor);
+
+    mdb_dbi_close(env, dbi);
+txn_abort:
+    mdb_txn_abort(txn);
+env_close:
+    mdb_env_close(env);
+}
+
+void lmdb_drop(const char* envname, int delete)
+{
+    int i, rc;
+    MDB_env *env;
+    MDB_txn *txn;
+    MDB_dbi dbi;
+    char *subname = NULL;
+    int envflags = 0;
+
+    printf("clearing the lmdb database %s delete %d\n", envname, delete);
+    rc = mdb_env_create(&env);
+    if (rc) {
+        fprintf(stderr, "mdb_env_create failed, error %d %s\n", rc, mdb_strerror(rc));
+        return EXIT_FAILURE;
+    }
+
+    //mdb_env_set_maxdbs(env, 2);
+
+    rc = mdb_env_open(env, envname, envflags, 0664);
+    if (rc) {
+        fprintf(stderr, "mdb_env_open failed, error %d %s\n", rc, mdb_strerror(rc));
+        goto env_close;
+    }
+
+    rc = mdb_txn_begin(env, NULL, 0, &txn);
+    if (rc) {
+        fprintf(stderr, "mdb_txn_begin failed, error %d %s\n", rc, mdb_strerror(rc));
+        goto env_close;
+    }
+
+    rc = mdb_open(txn, subname, 0, &dbi);
+    if (rc) {
+        fprintf(stderr, "mdb_open failed, error %d %s\n", rc, mdb_strerror(rc));
+        goto txn_abort;
+    }
+
+    rc = mdb_drop(txn, dbi, delete);
+    if (rc) {
+        fprintf(stderr, "mdb_drop failed, error %d %s\n", rc, mdb_strerror(rc));
+        goto txn_abort;
+    }
+    rc = mdb_txn_commit(txn);
+    if (rc) {
+        fprintf(stderr, "mdb_txn_commit failed, error %d %s\n", rc, mdb_strerror(rc));
+        goto txn_abort;
+    }
+    txn = NULL;
+
+txn_abort:
+    if (txn)
+        mdb_txn_abort(txn);
+env_close:
+    mdb_env_close(env);
+}
+
+
+int copy_redis_keys_lmdb() {
+
+    unsigned int i,j=0;char **str1;
+    redisContext *c = NULL; char *t;
+    redisReply *reply, *rep;
+    clock_t before, difference;
+    int sec;
+
+    /******************* Create and open LMDB stuff *******************/
+    int rc = 0;
+    MDB_env *env;
+    MDB_dbi dbi;
+    MDB_val key, data;
+    MDB_txn *txn;
+
+    rc = mdb_env_create(&env);
+    if (rc != MDB_SUCCESS) {
+        fprintf(stderr, "failed to create env. error %d %s\n", rc, mdb_strerror(rc));
+        return;
+    }
+    mdb_env_set_maxreaders(env, 1);
+    //mdb_env_set_mapsize(env,  1024 * 10485760);
+    mdb_env_set_mapsize(env, 4096 * 10485760);
+    rc = mdb_env_open(env, config.mdb_envname, MDB_WRITEMAP | MDB_MAPASYNC /*|MDB_NOSYNC*/, 0664);
+    //rc = mdb_env_open(env, config.mdb_envname, MDB_FIXEDMAP|MDB_NOSYNC /*|MDB_NOSYNC*/, 0664);
+    if (rc) {
+        fprintf(stderr, "mdb_env_open failed, error %d %s\n", rc, mdb_strerror(rc));
+        goto env_close;
+    }
+
+    rc = mdb_txn_begin(env, NULL, 0, &txn);
+    if (rc) {
+        fprintf(stderr, "mdb_txn_begin failed, error %d %s\n", rc, mdb_strerror(rc));
+        goto env_close;
+    }
+
+    mdb_dbi_open(txn, NULL, 0, &dbi);
+    /*****************************************************************/
+
+    c = getRedisContext(config.hostip, config.hostport, config.hostsocket);
+    before = clock();
+    reply = redisCommand(c,"keys *");
+    if (reply != NULL) {
+        if (reply->type == REDIS_REPLY_ERROR) {
+            fprintf(stderr, "Node %s:%d replied with error:\n%s\n", config.hostip, config.hostport, reply->str);
+
+            freeReplyObject(reply);
+            redisFree(c);
+            exit(1);
+        }
+        //freeReplyObject(reply);
+        //return -1;
+    } else {
+         fprintf(stderr, "reply is null\n");
+         return -1;
+    }
+
+    difference = clock() - before;
+    sec = difference / CLOCKS_PER_SEC;
+    printf("done processed 'keys *' %d sec\n", sec);
+
+    before = clock();
+    while (j < 1000 && reply->element[j] != NULL && reply->element[j]->str != NULL )
+    {
+        rep = redisCommand(c,"GET %s", reply->element[j]->str);
+        if (rep->str == NULL) {
+            fprintf(stderr, "rep->str is null\n");
+            return -1;
+        }
+        if (strstr(rep->str,"ERR Operation against a key holding"))
+        {
+                printf("%s\t\t%s\n", reply->element[j]->str,rep->str);
+                break;
+        }
+        key.mv_size = reply->element[j]->len;
+        key.mv_data = reply->element[j]->str;
+
+        data.mv_size = rep->len;
+        data.mv_data = rep->str;
+
+        printf("[%d] key: %p %.*s, data: %p %.*s\n", j,
+            key.mv_data,  (int) key.mv_size,  (char *) key.mv_data,
+            data.mv_data, (int) data.mv_size, (char *) data.mv_data);
+
+        mdb_put(txn, dbi, &key, &data, MDB_NOOVERWRITE);
+
+        /*rc = mdb_txn_commit(txn);
+        if (rc) {
+            fprintf(stderr, "mdb_txn_commit failed, error %d %s\n", rc, mdb_strerror(rc));
+            goto txn_abort;
+        }
+        bulk = 0;
+        rc = mdb_txn_begin(env, NULL, 0, &txn);
+        if (rc) {
+            fprintf(stderr, "mdb_txn_begin failed, error %d %s\n", rc, mdb_strerror(rc));
+            goto env_close;
+        }
+        mdb_dbi_open(txn, NULL, 0, &dbi);*/
+
+        j++;
+        freeReplyObject(rep);
+    }
+    printf("commit txn\n");
+    rc = mdb_txn_commit(txn);
+    if (rc) {
+        fprintf(stderr, "mdb_txn_commit failed, error %d %s\n", rc, mdb_strerror(rc));
+        goto txn_abort;
+    }
+    txn = NULL;
+
+    difference = clock() - before;
+    sec = difference / CLOCKS_PER_SEC;
+    printf("done processed %d gets in %d sec", j, sec);
+    freeReplyObject(reply);
+
+    mdb_dbi_close(env, dbi);
+txn_abort:
+    mdb_txn_abort(txn);
+env_close:
+    mdb_env_close(env);
+}

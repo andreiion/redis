@@ -52,6 +52,7 @@
 #include <openssl/err.h>
 #include <hiredis_ssl.h>
 #endif
+#include <lmdb.h>
 #include "adlist.h"
 #include "dict.h"
 #include "zmalloc.h"
@@ -95,6 +96,7 @@ static struct config {
     long long previous_tick;
     int keysize;
     int datasize;
+    int randomdata; //enable disable random data. if random data is disabled it will generate only 'aaaaaaaaaa' string of datasize len
     int randomkeys;
     int randomkeys_keyspacelen;
     int keepalive;
@@ -103,6 +105,11 @@ static struct config {
     long long totlatency;
     const char *title;
     list *clients;
+    int real_data_test;            /* flag to check that we are doing real_data_tests */
+    redisReply **val_reply;        /* pointer to a list of replies used only by one client */
+    int val_reply_count;           /* counter to keep track of how many value replies are */
+    int val_reply_total;           /* total number of  to keep track of how many value replies are */
+    redisReply *key_reply;        /* pointer to a list of replies used only by one client */
     int quiet;
     int csv;
     int loop;
@@ -132,6 +139,7 @@ static struct config {
 typedef struct _client {
     redisContext *context;
     sds obuf;
+    const char* cmd_type;   /* command type to pass to the obuf when we use real data */
     char **randptr;         /* Pointers to :rand: strings inside the command buf */
     size_t randlen;         /* Number of pointers in client->randptr */
     size_t randfree;        /* Number of unused pointers in client->randptr */
@@ -296,10 +304,14 @@ static redisContext *getRedisContext(const char *ip, int port,
     }
     if (config.auth == NULL)
         return ctx;
-    if (config.user == NULL)
+    if (config.user == NULL) {
         reply = redisCommand(ctx,"AUTH %s", config.auth);
-    else
+        //fprintf(stderr, "AUTH %s\n", config.auth);
+    }
+    else {
         reply = redisCommand(ctx,"AUTH %s %s", config.user, config.auth);
+        //fprintf(stderr, "AUTH %s %s\n", config.user, config.auth);
+    }
     if (reply != NULL) {
         if (reply->type == REDIS_REPLY_ERROR) {
             if (hostsocket == NULL)
@@ -607,6 +619,48 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
 }
 
+char* create_MGET_MSET_redis_cmd(const char* command_type, redisReply *key_reply, redisReply *value_reply, int request, int *len);
+
+char* create_command(const char* command_type, int *len, int requests_issued)
+{
+    char* cmd;
+    int j = requests_issued * 20;
+    if (test_is_selected("real_data_string_mset")) {
+        *len = redisFormatCommand(&cmd,"%s %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b", command_type,
+                                                            config.key_reply->element[j]->str,      config.val_reply[requests_issued]->element[0]->str,  config.val_reply[requests_issued]->element[0]->len,
+                                                            config.key_reply->element[j + 1]->str,  config.val_reply[requests_issued]->element[1]->str,  config.val_reply[requests_issued]->element[1]->len,
+                                                            config.key_reply->element[j + 2]->str,  config.val_reply[requests_issued]->element[2]->str,  config.val_reply[requests_issued]->element[2]->len,
+                                                            config.key_reply->element[j + 3]->str,  config.val_reply[requests_issued]->element[3]->str,  config.val_reply[requests_issued]->element[3]->len,
+                                                            config.key_reply->element[j + 4]->str,  config.val_reply[requests_issued]->element[4]->str,  config.val_reply[requests_issued]->element[4]->len,
+                                                            config.key_reply->element[j + 5]->str,  config.val_reply[requests_issued]->element[5]->str,  config.val_reply[requests_issued]->element[5]->len,
+                                                            config.key_reply->element[j + 6]->str,  config.val_reply[requests_issued]->element[6]->str,  config.val_reply[requests_issued]->element[6]->len,
+                                                            config.key_reply->element[j + 7]->str,  config.val_reply[requests_issued]->element[7]->str,  config.val_reply[requests_issued]->element[7]->len,
+                                                            config.key_reply->element[j + 8]->str,  config.val_reply[requests_issued]->element[8]->str,  config.val_reply[requests_issued]->element[8]->len,
+                                                            config.key_reply->element[j + 9]->str,  config.val_reply[requests_issued]->element[9]->str,  config.val_reply[requests_issued]->element[9]->len,
+                                                            config.key_reply->element[j + 10]->str, config.val_reply[requests_issued]->element[10]->str, config.val_reply[requests_issued]->element[10]->len,
+                                                            config.key_reply->element[j + 11]->str, config.val_reply[requests_issued]->element[11]->str, config.val_reply[requests_issued]->element[11]->len,
+                                                            config.key_reply->element[j + 12]->str, config.val_reply[requests_issued]->element[12]->str, config.val_reply[requests_issued]->element[12]->len,
+                                                            config.key_reply->element[j + 13]->str, config.val_reply[requests_issued]->element[13]->str, config.val_reply[requests_issued]->element[13]->len,
+                                                            config.key_reply->element[j + 14]->str, config.val_reply[requests_issued]->element[14]->str, config.val_reply[requests_issued]->element[14]->len,
+                                                            config.key_reply->element[j + 15]->str, config.val_reply[requests_issued]->element[15]->str, config.val_reply[requests_issued]->element[15]->len,
+                                                            config.key_reply->element[j + 16]->str, config.val_reply[requests_issued]->element[16]->str, config.val_reply[requests_issued]->element[16]->len,
+                                                            config.key_reply->element[j + 17]->str, config.val_reply[requests_issued]->element[17]->str, config.val_reply[requests_issued]->element[17]->len,
+                                                            config.key_reply->element[j + 18]->str, config.val_reply[requests_issued]->element[18]->str, config.val_reply[requests_issued]->element[18]->len,
+                                                            config.key_reply->element[j + 19]->str, config.val_reply[requests_issued]->element[19]->str, config.val_reply[requests_issued]->element[19]->len);
+        return cmd;
+    }
+    if (test_is_selected("real_data_string_set")) {
+
+        if(requests_issued && requests_issued % 20 == 0) {
+            config.val_reply_count++;
+            //printf("requests_issued %d/%d config.val_reply_count %d\n", requests_issued, config.key_reply->elements, config.val_reply_count);
+        }
+        *len = redisFormatCommand(&cmd,"%s %s %b", command_type, config.key_reply->element[requests_issued]->str, config.val_reply[config.val_reply_count]->element[requests_issued % 20]->str, config.val_reply[config.val_reply_count]->element[requests_issued % 20]->len);
+
+        return cmd;
+    }
+}
+
 static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     client c = privdata;
     UNUSED(el);
@@ -621,6 +675,20 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         if (requests_issued >= config.requests) {
             return;
         }
+        if (config.real_data_test) {
+            int len = 0;
+            char* cmd = create_command(c->cmd_type, &len, requests_issued);
+
+            c->obuf = sdsempty();
+            c->obuf = sdscatlen(c->obuf,cmd,len);
+            free(cmd);
+
+        /*for (int i = 0; i < 20; ++i) {
+            freeReplyObject(config.key_reply->element[j + i]);
+        }*/
+        }
+
+        //freeReplyObject(config.val_reply[requests_issued]);
 
         /* Really initialize: randomize keys and set start time. */
         if (config.randomkeys) randomizeClientKey(c);
@@ -651,6 +719,14 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             }
         }
     }
+}
+
+const char* getCommand() {
+    if (test_is_selected("real_data_string_set"))
+        return "SET";
+    if (test_is_selected("real_data_string_mset"))
+        return "MSET";
+    return NULL;
 }
 
 /* Create a benchmark client, configured to send the command passed as 'cmd' of
@@ -698,7 +774,15 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
             port = node->port;
             c->cluster_node = node;
         }
-        c->context = redisConnectNonBlock(ip,port);
+        if (config.real_data_test) {
+            //c->context = redisConnectNonBlock("172.17.0.3", 6381);
+            //c->context =  getRedisContext("172.17.0.3", 6381, config.hostsocket);
+            //c->context = redisConnectNonBlock(ip,port);
+            c->context =  getRedisContext(ip, port, config.hostsocket);
+            c->cmd_type = getCommand();
+        } else {
+            c->context = redisConnectNonBlock(ip,port);
+        }
     } else {
         c->context = redisConnectUnixNonBlock(config.hostsocket);
     }
@@ -729,7 +813,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
      * These commands are discarded after the first response, so if the client is
      * reused the commands will not be used again. */
     c->prefix_pending = 0;
-    if (config.auth) {
+    if (!config.real_data_test && config.auth) {
         char *buf = NULL;
         int len;
         if (config.user == NULL)
@@ -1400,8 +1484,12 @@ static void genBenchmarkRandomData(char *data, int count) {
     int i = 0;
 
     while (count--) {
-        state = (state*1103515245+12345);
-        data[i++] = '0'+((state>>16)&63);
+        if (!config.randomdata) {
+            data[i++] = 'a';
+        } else {
+            state = (state*1103515245+12345);
+            data[i++] = '0'+((state>>16)&63);
+        }
     }
 }
 
@@ -1448,6 +1536,9 @@ int parseOptions(int argc, const char **argv) {
             config.datasize = atoi(argv[++i]);
             if (config.datasize < 1) config.datasize=1;
             if (config.datasize > 1024*1024*1024) config.datasize = 1024*1024*1024;
+        } else if (!strcmp(argv[i], "--random-data")) {
+            if (lastarg) goto invalid;
+            config.randomdata = atoi(argv[++i]);
         } else if (!strcmp(argv[i],"-P")) {
             if (lastarg) goto invalid;
             config.pipeline = atoi(argv[++i]);
@@ -1635,7 +1726,7 @@ int showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData
     atomicGet(config.liveclients, liveclients);
     atomicGet(config.requests_finished, requests_finished);
     atomicGet(config.previous_requests_finished, previous_requests_finished);
-    
+
     if (liveclients == 0 && requests_finished != config.requests) {
         fprintf(stderr,"All clients disconnected... aborting.\n");
         exit(1);
@@ -1663,6 +1754,528 @@ int showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData
     hdr_reset(config.current_sec_latency_histogram);
     fflush(stdout);
     return 250; /* every 250ms */
+}
+
+struct sigaction sigact;
+sigset_t waitset;
+siginfo_t info;
+
+int wait_send_signal() {
+    int result = 0;
+
+    printf("Waiting for SIGUSR1 to start sending data\n");
+    result = sigwaitinfo( &waitset, &info );
+
+    return result;
+}
+
+int bg_get_string_data(redisContext *c, redisContext *ctx, redisReply *reply)
+{
+    redisReply *rep = NULL;
+    size_t total_strings_size = 0;
+    struct timespec start, stop;
+    double sec;
+
+    clock_gettime(CLOCK_REALTIME, &start);
+    char* cmd;
+    int len;
+    const char **cmd_argv = zmalloc(reply->elements + 1);
+    cmd_argv[0] = "MGET";
+    printf(" start looping %d elemenets\n", reply->elements + 1);
+    for (int i = 1; i < reply->elements + 1; i++) {
+        cmd_argv[i] = reply->element[i - 1]->str;
+        //printf("[%d/%d] cmd_argv '%s' \n", i,  reply->elements, cmd_argv[i]);
+        total_strings_size += reply->element[i - 1]->len;
+    }
+    //printf(" after looop\n");
+
+    len = redisFormatCommandArgv(&cmd, reply->elements + 1,cmd_argv, NULL);
+
+    printf(" cmd '%s'\n", cmd);
+    rep = redisCommand(c, cmd, cmd_argv);
+    zfree(cmd_argv);
+    free(cmd);
+
+    /*clock_gettime( CLOCK_REALTIME, &stop);
+    sec = ( stop.tv_sec - start.tv_sec )
+          + ( stop.tv_nsec - start.tv_nsec )
+            / 1000000000;
+    printf("done processed %ld SETs (total size %ld) (avg size %ld) in %f sec \n", rep->elements, reply->elements, total_strings_size /reply->elements, sec);*/
+
+
+}
+
+
+char* create_MGET_MSET_redis_cmd(const char* command_type, redisReply *key_reply, redisReply *value_reply, int request, int *len)
+{
+    //len = redisFormatCommand(&cmd, "%s %s",command_type, key_reply->element[cmd_size * request + i - 1]->str);
+
+    char* cmd;
+    int cmd_size = 10;
+    const char **cmd_argv = zmalloc(2*cmd_size + 1);
+    int *len_v= zmalloc(2 * cmd_size + 1);
+    cmd_argv[0] = "MSET";
+    len_v[0] = 3;
+    int j = 1;
+    for (int i = 1; i < cmd_size + 1; i++) {
+        //sds key_placeholder = sdscatprintf(sdsnew(""),"%s",reply->element[j + i - 1]->str);
+        //cmd_argv[i] = key_placeholder;
+        cmd_argv[j]     = key_reply->element[cmd_size * request + i - 1]->str;
+        len_v[j]        = key_reply->element[cmd_size * request + i - 1]->len;
+        cmd_argv[j + 1] = value_reply->element[i - 1]->str;
+        len_v[j + 1]    = value_reply->element[i - 1]->len;
+        //printf("[%d/%d] cmd_argv '%s' (key len %d) cmd_argv '%s' (val len %d)\n", cmd_size * request + i - 1, key_reply->elements, cmd_argv[j], len_v[j], cmd_argv[j + 1], len_v[j + 1]);
+        //total_strings_size += reply->element[i - 1]->len;
+        j = j + 2;
+    }
+    *len = redisFormatCommandArgv(&cmd, 2*cmd_size + 1, cmd_argv, len_v);
+
+    printf(" cmd '%s'\n", cmd);
+    //free(cmd);
+    zfree(cmd_argv);
+    zfree(len_v);
+
+    return cmd;
+}
+int string_get_real_data(redisContext *c, redisContext *ctx, redisReply *reply)
+{
+    struct timespec start, stop;
+    double sec;
+
+    redisReply *set_reply;
+    redisReply **rep;
+
+    rep = zmalloc(reply->elements * sizeof(redisReply*));
+    int j = 0;
+    size_t mget_size = 20;
+    int reply_it = 0;
+    clock_gettime( CLOCK_REALTIME, &start);
+    printf("reply_it should be %d\n", (reply->elements - mget_size) / mget_size);
+    for (j = 0; j < reply->elements - mget_size; j = j + mget_size) {
+        rep[reply_it] = redisCommand(c,"MGET %s %s %s %s %s %s %s %s %s %s \
+                                   %s %s %s %s %s %s %s %s %s %s", reply->element[j]->str,      reply->element[j + 1]->str,
+                                                                   reply->element[j + 2]->str,  reply->element[j + 3]->str,
+                                                                   reply->element[j + 4]->str,  reply->element[j + 5]->str,
+                                                                   reply->element[j + 6]->str,  reply->element[j + 7]->str,
+                                                                   reply->element[j + 8]->str,  reply->element[j + 9]->str,
+                                                                   reply->element[j + 10]->str, reply->element[j + 11]->str,
+                                                                   reply->element[j + 12]->str, reply->element[j + 13]->str,
+                                                                   reply->element[j + 14]->str, reply->element[j + 15]->str,
+                                                                   reply->element[j + 16]->str, reply->element[j + 17]->str,
+                                                                   reply->element[j + 18]->str, reply->element[j + 19]->str);
+
+        if (rep[reply_it]->type == REDIS_REPLY_ERROR) {
+            printf("Error: %s\n", rep[reply_it]->str);
+            return -1;
+        } else if (rep[reply_it]->type != REDIS_REPLY_ARRAY) {
+            printf("Error: %s\n", rep[reply_it]->str);
+            return -1;
+        }
+        reply_it++;
+    }
+    clock_gettime( CLOCK_REALTIME, &stop);
+    sec = ( stop.tv_sec - start.tv_sec ) + ( stop.tv_nsec - start.tv_nsec ) / 1000000000;
+    printf("done processed %ld MGETs in %f sec \n", reply_it, sec);
+
+    if (test_is_selected("real_data_string_mset")) {
+        config.requests = reply_it - 1;
+    }
+    if (test_is_selected("real_data_string_set")) {
+        config.requests = reply->elements - (reply->elements % mget_size);
+    }
+    config.val_reply_count = 0;
+    config.val_reply = rep;
+    printf(" calc reply_it %d actual %d\n", (reply->elements - mget_size) / mget_size, reply_it);
+    wait_send_signal();
+
+    //string_set_real_data(ctx, reply, mget_size);
+    //benchmark("MSET","PING\r\n",6);
+    //benchmark("MSET","PING\r\n",6);
+}
+
+int string_cset_real_data(redisContext *ctx, redisReply *keys_reply, int mget_size)
+{
+    struct timespec start, stop;
+    double sec;
+
+    redisReply *set_reply;
+    redisReply **rep = config.val_reply;
+
+    clock_gettime( CLOCK_REALTIME, &start);
+    int reply_it = 0;
+    int j = 0;
+    for (j = 0; j < keys_reply->elements - mget_size; j = j + mget_size) {
+        //set_reply = redisCommand(ctx,"SET %s %b", reply->element[j]->str, rep[j]->str, rep[j]->len);
+        //printf("rep '%s'\n", rep[reply_it]->str);
+        //printf("rep '%s' '%s'\n", rep[reply_it]->element[0]->str, rep[reply_it]->element[1]);
+        set_reply = redisCommand(ctx,"MSET %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b",
+                                                             keys_reply->element[j]->str,      rep[reply_it]->element[0]->str,      rep[reply_it]->element[0]->len,
+                                                             keys_reply->element[j + 1]->str,  rep[reply_it]->element[1]->str,      rep[reply_it]->element[1]->len,
+                                                             keys_reply->element[j + 2]->str,  rep[reply_it]->element[2]->str,      rep[reply_it]->element[2]->len,
+                                                             keys_reply->element[j + 3]->str,  rep[reply_it]->element[3]->str,      rep[reply_it]->element[3]->len,
+                                                             keys_reply->element[j + 4]->str,  rep[reply_it]->element[4]->str,      rep[reply_it]->element[4]->len,
+                                                             keys_reply->element[j + 5]->str,  rep[reply_it]->element[5]->str,      rep[reply_it]->element[5]->len,
+                                                             keys_reply->element[j + 6]->str,  rep[reply_it]->element[6]->str,      rep[reply_it]->element[6]->len,
+                                                             keys_reply->element[j + 7]->str,  rep[reply_it]->element[7]->str,      rep[reply_it]->element[7]->len,
+                                                             keys_reply->element[j + 8]->str,  rep[reply_it]->element[8]->str,      rep[reply_it]->element[8]->len,
+                                                             keys_reply->element[j + 9]->str,  rep[reply_it]->element[9]->str,      rep[reply_it]->element[9]->len);
+        freeReplyObject(set_reply);
+
+        set_reply = redisCommand(ctx,"MSET %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b",
+                                                             keys_reply->element[j + 10]->str,  rep[reply_it]->element[10]->str,      rep[reply_it]->element[10]->len,
+                                                             keys_reply->element[j + 11]->str,  rep[reply_it]->element[11]->str,      rep[reply_it]->element[11]->len,
+                                                             keys_reply->element[j + 12]->str,  rep[reply_it]->element[12]->str,      rep[reply_it]->element[12]->len,
+                                                             keys_reply->element[j + 13]->str,  rep[reply_it]->element[13]->str,      rep[reply_it]->element[13]->len,
+                                                             keys_reply->element[j + 14]->str,  rep[reply_it]->element[14]->str,      rep[reply_it]->element[14]->len,
+                                                             keys_reply->element[j + 15]->str,  rep[reply_it]->element[15]->str,      rep[reply_it]->element[15]->len,
+                                                             keys_reply->element[j + 16]->str,  rep[reply_it]->element[16]->str,      rep[reply_it]->element[16]->len,
+                                                             keys_reply->element[j + 17]->str,  rep[reply_it]->element[17]->str,      rep[reply_it]->element[17]->len,
+                                                             keys_reply->element[j + 18]->str,  rep[reply_it]->element[18]->str,      rep[reply_it]->element[18]->len,
+                                                             keys_reply->element[j + 19]->str,  rep[reply_it]->element[19]->str,      rep[reply_it]->element[19]->len);
+        freeReplyObject(rep[reply_it]);
+        freeReplyObject(set_reply);
+        reply_it++;
+    }
+    clock_gettime( CLOCK_REALTIME, &stop);
+    sec = ( stop.tv_sec - start.tv_sec ) + ( stop.tv_nsec - start.tv_nsec ) / 1000000000;
+    printf("done processed %ld SETs in %f sec \n", j, sec);
+    zfree(rep);
+}
+
+int string_set_real_data(redisContext *ctx, redisReply *keys_reply, int mget_size)
+{
+    struct timespec start, stop;
+    double sec;
+
+    redisReply *set_reply;
+    redisReply **rep = config.val_reply;
+
+    clock_gettime( CLOCK_REALTIME, &start);
+    int reply_it = 0;
+    int j = 0;
+    for (j = 0; j < keys_reply->elements - mget_size; j = j + mget_size) {
+        //set_reply = redisCommand(ctx,"SET %s %b", reply->element[j]->str, rep[j]->str, rep[j]->len);
+        //printf("rep '%s'\n", rep[reply_it]->str);
+        //printf("rep '%s' '%s'\n", rep[reply_it]->element[0]->str, rep[reply_it]->element[1]);
+        set_reply = redisCommand(ctx,"MSET %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b",
+                                                             keys_reply->element[j]->str,      rep[reply_it]->element[0]->str,      rep[reply_it]->element[0]->len,
+                                                             keys_reply->element[j + 1]->str,  rep[reply_it]->element[1]->str,      rep[reply_it]->element[1]->len,
+                                                             keys_reply->element[j + 2]->str,  rep[reply_it]->element[2]->str,      rep[reply_it]->element[2]->len,
+                                                             keys_reply->element[j + 3]->str,  rep[reply_it]->element[3]->str,      rep[reply_it]->element[3]->len,
+                                                             keys_reply->element[j + 4]->str,  rep[reply_it]->element[4]->str,      rep[reply_it]->element[4]->len,
+                                                             keys_reply->element[j + 5]->str,  rep[reply_it]->element[5]->str,      rep[reply_it]->element[5]->len,
+                                                             keys_reply->element[j + 6]->str,  rep[reply_it]->element[6]->str,      rep[reply_it]->element[6]->len,
+                                                             keys_reply->element[j + 7]->str,  rep[reply_it]->element[7]->str,      rep[reply_it]->element[7]->len,
+                                                             keys_reply->element[j + 8]->str,  rep[reply_it]->element[8]->str,      rep[reply_it]->element[8]->len,
+                                                             keys_reply->element[j + 9]->str,  rep[reply_it]->element[9]->str,      rep[reply_it]->element[9]->len);
+        freeReplyObject(set_reply);
+
+        set_reply = redisCommand(ctx,"MSET %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b",
+                                                             keys_reply->element[j + 10]->str,  rep[reply_it]->element[10]->str,      rep[reply_it]->element[10]->len,
+                                                             keys_reply->element[j + 11]->str,  rep[reply_it]->element[11]->str,      rep[reply_it]->element[11]->len,
+                                                             keys_reply->element[j + 12]->str,  rep[reply_it]->element[12]->str,      rep[reply_it]->element[12]->len,
+                                                             keys_reply->element[j + 13]->str,  rep[reply_it]->element[13]->str,      rep[reply_it]->element[13]->len,
+                                                             keys_reply->element[j + 14]->str,  rep[reply_it]->element[14]->str,      rep[reply_it]->element[14]->len,
+                                                             keys_reply->element[j + 15]->str,  rep[reply_it]->element[15]->str,      rep[reply_it]->element[15]->len,
+                                                             keys_reply->element[j + 16]->str,  rep[reply_it]->element[16]->str,      rep[reply_it]->element[16]->len,
+                                                             keys_reply->element[j + 17]->str,  rep[reply_it]->element[17]->str,      rep[reply_it]->element[17]->len,
+                                                             keys_reply->element[j + 18]->str,  rep[reply_it]->element[18]->str,      rep[reply_it]->element[18]->len,
+                                                             keys_reply->element[j + 19]->str,  rep[reply_it]->element[19]->str,      rep[reply_it]->element[19]->len);
+        freeReplyObject(rep[reply_it]);
+        freeReplyObject(set_reply);
+        reply_it++;
+    }
+    clock_gettime( CLOCK_REALTIME, &stop);
+    sec = ( stop.tv_sec - start.tv_sec ) + ( stop.tv_nsec - start.tv_nsec ) / 1000000000;
+    printf("done processed %ld SETs in %f sec \n", j, sec);
+    zfree(rep);
+}
+
+int get_and_set_string_data(redisContext *c, redisContext *ctx, redisReply *reply)
+{
+    redisReply *rep, *set_reply;
+
+    struct timespec start, stop;
+    double sec;
+
+    size_t j = 0;
+    size_t total_strings_size = 0;
+    size_t mget_size = 20;
+    clock_gettime( CLOCK_REALTIME, &start);
+    while (j + mget_size - 1 < reply->elements) {
+        rep = redisCommand(c,"MGET %s %s %s %s %s %s %s %s %s %s \
+                                   %s %s %s %s %s %s %s %s %s %s", reply->element[j]->str,
+                                                                   reply->element[j + 1]->str,
+                                                                   reply->element[j + 2]->str,
+                                                                   reply->element[j + 3]->str,
+                                                                   reply->element[j + 4]->str,
+                                                                   reply->element[j + 5]->str,
+                                                                   reply->element[j + 6]->str,
+                                                                   reply->element[j + 7]->str,
+                                                                   reply->element[j + 8]->str,
+                                                                   reply->element[j + 9]->str,
+                                                                   reply->element[j + 10]->str,
+                                                                   reply->element[j + 11]->str,
+                                                                   reply->element[j + 12]->str,
+                                                                   reply->element[j + 13]->str,
+                                                                   reply->element[j + 14]->str,
+                                                                   reply->element[j + 15]->str,
+                                                                   reply->element[j + 16]->str,
+                                                                   reply->element[j + 17]->str,
+                                                                   reply->element[j + 18]->str,
+                                                                   reply->element[j + 19]->str);
+        if (rep->type == REDIS_REPLY_ERROR) {
+            printf("Error: %s\n", rep->str);
+            return -1;
+        } else if (rep->type != REDIS_REPLY_ARRAY) {
+            printf("Error: %s\n", rep->str);
+            return -1;
+        }
+
+        if (rep->elements != mget_size) {
+            fprintf(stderr, "rep->element is %ld\n", rep->elements);
+            return -1;
+        }
+
+        for (int i = 0; i < mget_size; ++i) {
+             total_strings_size += rep->element[i]->len;
+        }
+
+        for (int i = 0; i < mget_size; i=i+10) {
+
+            //printf("[%d] '%s' val '%s' (len %d)\n", j + i, reply->element[j + i]->str, rep->element[i]->str, rep->element[i]->len);
+            set_reply = redisCommand(ctx,"MSET %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b",
+                                                             reply->element[j + i]->str,      rep->element[i]->str,     rep->element[i]->len,
+                                                             reply->element[j + i + 1]->str,  rep->element[i + 1]->str, rep->element[i + 1]->len,
+                                                             reply->element[j + i + 2]->str,  rep->element[i + 2]->str, rep->element[i + 2]->len,
+                                                             reply->element[j + i + 3]->str,  rep->element[i + 3]->str, rep->element[i + 3]->len,
+                                                             reply->element[j + i + 4]->str,  rep->element[i + 4]->str, rep->element[i + 4]->len,
+                                                             reply->element[j + i + 5]->str,  rep->element[i + 5]->str, rep->element[i + 5]->len,
+                                                             reply->element[j + i + 6]->str,  rep->element[i + 6]->str, rep->element[i + 6]->len,
+                                                             reply->element[j + i + 7]->str,  rep->element[i + 7]->str, rep->element[i + 7]->len,
+                                                             reply->element[j + i + 8]->str,  rep->element[i + 8]->str, rep->element[i + 8]->len,
+                                                             reply->element[j + i + 9]->str,  rep->element[i + 9]->str, rep->element[i + 9]->len);
+
+            if (rep->type == REDIS_REPLY_ERROR) {
+                printf("Error: %s\n", rep->str);
+                return -1;
+            }
+            freeReplyObject(set_reply);
+        }
+       /* set_reply = redisCommand(ctx,"MSET %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b \
+                                           %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b",
+                                            reply->element[j]->str,     rep->element[0]->str,   rep->element[0]->len,
+                                            reply->element[j + 1]->str, rep->element[1]->str,   rep->element[1]->len,
+                                            reply->element[j + 2]->str, rep->element[2]->str,   rep->element[2]->len,
+                                            reply->element[j + 3]->str, rep->element[3]->str,   rep->element[3]->len,
+                                            reply->element[j + 4]->str, rep->element[4]->str,   rep->element[4]->len,
+                                            reply->element[j + 5]->str, rep->element[5]->str,   rep->element[5]->len,
+                                            reply->element[j + 6]->str, rep->element[6]->str,   rep->element[6]->len,
+                                            reply->element[j + 7]->str, rep->element[7]->str,   rep->element[7]->len,
+                                            reply->element[j + 8]->str, rep->element[8]->str,   rep->element[8]->len,
+                                            reply->element[j + 10]->str, rep->element[10]->str, rep->element[10]->len,
+                                            reply->element[j + 11]->str, rep->element[11]->str, rep->element[11]->len,
+                                            reply->element[j + 12]->str, rep->element[12]->str, rep->element[12]->len,
+                                            reply->element[j + 13]->str, rep->element[13]->str, rep->element[13]->len,
+                                            reply->element[j + 14]->str, rep->element[14]->str, rep->element[14]->len,
+                                            reply->element[j + 15]->str, rep->element[15]->str, rep->element[15]->len,
+                                            reply->element[j + 16]->str, rep->element[16]->str, rep->element[16]->len,
+                                            reply->element[j + 17]->str, rep->element[17]->str, rep->element[17]->len,
+                                            reply->element[j + 18]->str, rep->element[18]->str, rep->element[18]->len,
+                                            reply->element[j + 19]->str, rep->element[19]->str, rep->element[19]->len);
+
+        if (rep->type == REDIS_REPLY_ERROR) {
+            printf("Error: %s\n", rep->str);
+            return -1;
+        }
+        freeReplyObject(set_reply);*/
+
+        j = j + mget_size;
+        freeReplyObject(rep);
+    }
+
+    clock_gettime( CLOCK_REALTIME, &stop);
+    sec = ( stop.tv_sec - start.tv_sec )
+          + ( stop.tv_nsec - start.tv_nsec )
+            / 1000000000;
+    printf("done processed %ld SETs (total size %ld) (avg size %ld) in %f sec \n", j, total_strings_size, total_strings_size / j, sec);
+
+
+
+    return 0;
+}
+int real_db_size = 2056608;
+
+int get_and_set_hash_data(redisContext *c, redisContext *ctx, redisReply *reply)
+{
+    redisReply *rep, *hash_reply;
+    struct timespec start, stop;
+    double sec;
+
+    clock_gettime( CLOCK_REALTIME, &start);
+
+    int j = 0;
+    while (j < reply->elements) {
+        hash_reply = redisCommand(c,"HGETALL %s", reply->element[j]->str);
+        if (hash_reply->type == REDIS_REPLY_ERROR) {
+            printf("Error: %s\n", hash_reply->str);
+            return -1;
+        } else if (hash_reply->type != REDIS_REPLY_ARRAY) {
+            printf("Error: %s\n", hash_reply->str);
+            return -1;
+        }
+        //printf("hashkey %s size %d\n",reply->element[j]->str, hash_reply->elements);
+        int k = 0;
+        int hset_size = 10;
+        redisReply * hash_set_reply;
+        while (k + hset_size - 1 < hash_reply->elements) {
+            hash_set_reply = redisCommand(ctx, "HSET %s %s %s %s %s %s %s %s %s %s %s",
+                                             reply->element[j]->str,
+                                             hash_reply->element[k]->str,     hash_reply->element[k + 1]->str,
+                                             hash_reply->element[k + 2]->str, hash_reply->element[k + 3]->str,
+                                             hash_reply->element[k + 4]->str, hash_reply->element[k + 5]->str,
+                                             hash_reply->element[k + 6]->str, hash_reply->element[k + 7]->str,
+                                             hash_reply->element[k + 8]->str, hash_reply->element[k + 9]->str);
+
+            //printf("hash key %s field %s value %s\n", reply->element[j]->str, hash_reply->element[k]->str, hash_reply->element[k + 1]->str);
+            k = k + hset_size;
+
+            freeReplyObject(hash_set_reply);
+        }
+        freeReplyObject(hash_reply);
+        j++;
+    }
+
+    clock_gettime( CLOCK_REALTIME, &stop);
+    sec = ( stop.tv_sec - start.tv_sec )
+          + ( stop.tv_nsec - start.tv_nsec )
+            / 1000000000;
+    printf("done processed HGETALL and HSET in %f sec \n", sec);
+
+    return 0;
+}
+
+int get_and_set_set_data(redisContext *c, redisContext *ctx, redisReply *reply) {
+
+    redisReply *set_reply, *set_add_reply;
+    struct timespec start, stop;
+    double sec;
+
+    clock_gettime( CLOCK_REALTIME, &start);
+
+    int j = 0;
+    while (j < reply->elements) {
+        set_reply = redisCommand(c,"SMEMBERS %s", reply->element[j]->str);
+
+        printf("set '%s' elements %d\n", reply->element[j]->str, set_reply->elements);
+
+        int k = 0;
+        while(k < set_reply->elements) {
+            printf("set '%s' member '%s' (len %d)\n", reply->element[j]->str, set_reply->element[k]->str, set_reply->element[k]->len);
+            set_add_reply = redisCommand(ctx, "SADD %s %b", reply->element[j]->str, set_reply->element[k]->str, set_reply->element[k]->len);
+
+            freeReplyObject(set_add_reply);
+            k++;
+        }
+        freeReplyObject(set_reply);
+        j++;
+    }
+
+    clock_gettime( CLOCK_REALTIME, &stop);
+    sec = ( stop.tv_sec - start.tv_sec )
+          + ( stop.tv_nsec - start.tv_nsec )
+            / 1000000000;
+    printf("done processed SMEMBERS and SADD in %f sec \n", sec);
+
+    return 0;
+}
+
+//TODO fix the lists as there can be lists inside the lists and this is not supported for parsing
+int get_and_set_list_data(redisContext *c, redisContext *ctx, redisReply *reply) {
+    redisReply *list_reply, *list_push_reply;
+    struct timespec start, stop;
+    double sec;
+
+    clock_gettime( CLOCK_REALTIME, &start);
+
+    int j = 0;
+    while (j < reply->elements) {
+        list_reply = redisCommand(c,"LRANGE %s 0 -1", reply->element[j]->str);
+
+        printf("list key %s\n", reply->element[j]->str);
+        if (list_reply->type == REDIS_REPLY_ERROR) {
+            printf("Error: %s\n", list_reply->str);
+            return -1;
+        }
+        if (list_reply->type != REDIS_REPLY_ARRAY) {
+            list_push_reply = redisCommand(ctx, "LPUSH %s %s", reply->element[j]->str, list_reply->str);
+            printf("LPUSH %s %s\n", reply->element[j]->str, list_reply->str);
+            freeReplyObject(list_push_reply);
+            goto continue_loop;
+        }
+
+        int k = 0;
+        while(k < list_reply->elements) {
+            list_push_reply = redisCommand(ctx, "LPUSH %s %s", reply->element[j]->str, list_reply->element[k]->str);
+            printf("LPUSH array %s %s\n", reply->element[j]->str, list_reply->element[k]->str);
+
+            freeReplyObject(list_push_reply);
+            k++;
+        }
+continue_loop:
+        freeReplyObject(list_reply);
+        j++;
+    }
+    clock_gettime( CLOCK_REALTIME, &stop);
+    sec = ( stop.tv_sec - start.tv_sec )
+          + ( stop.tv_nsec - start.tv_nsec )
+            / 1000000000;
+    printf("done processed LRANGE and LPUSH in %f sec \n", sec);
+    return 0;
+}
+
+int redis_real_data_scan_keys(const char* key_type) {
+
+    redisContext *c = NULL;
+    redisReply *reply;
+    struct timespec start, stop;
+    double sec;
+
+    clock_gettime( CLOCK_REALTIME, &start);
+    //TODO this should be given via redis-benchmark args later
+    c = getRedisContext("172.17.0.3", 6381, config.hostsocket);
+    reply = redisCommand(c,"SCAN 0 type %s count %d", key_type, real_db_size);
+    if (reply == NULL) {
+        fprintf(stderr, "reply is null\n");
+        return -1;
+    }
+
+    clock_gettime( CLOCK_REALTIME, &stop);
+    sec = ( stop.tv_sec - start.tv_sec )
+          + ( stop.tv_nsec - start.tv_nsec )
+            / 1000000000;
+    printf("done SCAN 0 type %s count %d (%d elements) in %f sec \n", key_type, real_db_size, reply->element[1]->elements, sec);
+
+    redisContext *ctx = getRedisContext(config.hostip, config.hostport, config.hostsocket);
+    //config.val_reply = zmalloc(reply->elements * sizeof(redisReply*));
+
+    if (strcmp(key_type, "string") == 0) {
+        config.key_reply = reply->element[1];
+        string_get_real_data(c, ctx, reply->element[1]);
+    }
+    if (strcmp(key_type, "hash") == 0) {
+        printf("hash type. reply size %ld\n", reply->element[1]->elements);
+        get_and_set_hash_data(c, ctx, reply->element[1]);
+    }
+    if (strcmp(key_type, "set") == 0) {
+        get_and_set_set_data(c, ctx, reply->element[1]);
+    }
+    if (strcmp(key_type, "list") == 0) {
+        get_and_set_list_data(c, ctx, reply->element[1]);
+    }
+    //freeReplyObject(reply);
+
+    return 0;
 }
 
 /* Return true if the named test was selected using the -t command line
@@ -1724,6 +2337,7 @@ int main(int argc, const char **argv) {
     config.is_updating_slots = 0;
     config.slots_last_update = 0;
     config.enable_tracking = 0;
+    config.real_data_test = 0;
 
     i = parseOptions(argc,argv);
     argc -= i;
@@ -1831,6 +2445,16 @@ int main(int argc, const char **argv) {
         return 0;
     }
 
+    //TODO take this and put it into a function
+    sigemptyset( &sigact.sa_mask );
+    sigact.sa_flags = 0;
+    sigact.sa_handler = NULL;
+    sigaction( SIGALRM, &sigact, NULL );
+
+    sigemptyset( &waitset );
+    sigaddset( &waitset, SIGUSR1 );
+
+    sigprocmask( SIG_BLOCK, &waitset, NULL );
     /* Run default benchmark suite. */
     data = zmalloc(config.datasize+1);
     do {
@@ -1844,6 +2468,32 @@ int main(int argc, const char **argv) {
             len = redisFormatCommand(&cmd,"PING");
             benchmark("PING_MBULK",cmd,len);
             free(cmd);
+        }
+
+        if (test_is_selected("real_data_string_mget")) {
+            redis_real_data_scan_keys("string");
+        }
+        if (test_is_selected("real_data_string_mset")) {
+            config.real_data_test = 1;
+            redis_real_data_scan_keys("string");
+            benchmark("MSET", NULL, 0);
+        }
+        if (test_is_selected("real_data_string_set")) {
+            config.real_data_test = 1;
+            redis_real_data_scan_keys("string");
+            benchmark("SET", NULL, 0);
+        }
+
+        if (test_is_selected("real_data_hash")) {
+            redis_real_data_scan_keys("hash");
+        }
+
+        if (test_is_selected("real_data_set")) {
+            redis_real_data_scan_keys("set");
+        }
+
+        if (test_is_selected("real_data_list")) {
+            redis_real_data_scan_keys("list");
         }
 
         if (test_is_selected("set")) {

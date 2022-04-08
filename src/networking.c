@@ -30,10 +30,16 @@
 #include "server.h"
 #include "atomicvar.h"
 #include "cluster.h"
+#include "lzf.h"    /* LZF compression library */
+#include "lz4.h"
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <math.h>
 #include <ctype.h>
+
+
+
+#define MIN_COMPRESS_BYTES 64
 
 static void setProtocolError(const char *errstr, client *c);
 int postponeClientRead(client *c);
@@ -169,6 +175,7 @@ client *createClient(connection *conn) {
     c->slave_capa = SLAVE_CAPA_NONE;
     c->reply = listCreate();
     c->reply_bytes = 0;
+    c->max_memory_used = 0;
     c->obuf_soft_limit_reached_time = 0;
     listSetFreeMethod(c->reply,freeClientReplyValue);
     listSetDupMethod(c->reply,dupClientReplyValue);
@@ -201,6 +208,28 @@ client *createClient(connection *conn) {
     if (conn) linkClient(c);
     initClientMultiState(c);
     return c;
+}
+
+/* Compression wrapper for the reply nodes data.
+ */
+int compress_reply (const char* source, char* dest, int compressedSize, int maxOutputSize) {
+    if (server.client_obuf_compression == CLIENT_OBUF_LZF_COMPRESSION) {
+        return lzf_compress(source, compressedSize, dest, maxOutputSize);
+    } else if (server.client_obuf_compression == CLIENT_OBUF_LZ4_COMPRESSION) {
+        return LZ4_compress_default(source, dest, compressedSize, maxOutputSize);
+    }
+    return -1;
+}
+
+/* Decompression wrapper for the reply nodes data.
+ */
+int decompress_reply (const char* source, char* dest, int compressedSize, int maxDecompressedSize) {
+    if (server.client_obuf_compression == CLIENT_OBUF_LZF_COMPRESSION) {
+        return lzf_decompress(source, compressedSize, dest, maxDecompressedSize);
+    } else if (server.client_obuf_compression == CLIENT_OBUF_LZ4_COMPRESSION) {
+        return LZ4_decompress_safe(source, dest, compressedSize, maxDecompressedSize);
+    }
+    return -1;
 }
 
 /* This function puts the client in the queue of clients that should write
@@ -307,9 +336,10 @@ int _addReplyToBuffer(client *c, const char *s, size_t len) {
     return C_OK;
 }
 
+void trimReplyUnusedTailSpace(client *c);
 /* Adds the reply to the reply linked list.
  * Note: some edits to this function need to be relayed to AddReplyFromClient. */
-void _addReplyProtoToList(client *c, const char *s, size_t len) {
+void _addReplyProtoToList2(client *c, const char *s, size_t len) {
     if (c->flags & CLIENT_CLOSE_AFTER_REPLY) return;
 
     listNode *ln = listLast(c->reply);
@@ -343,6 +373,140 @@ void _addReplyProtoToList(client *c, const char *s, size_t len) {
         c->reply_bytes += tail->size;
 
         closeClientOnOutputBufferLimitReached(c, 1);
+    }
+}
+
+/* Adds the reply to the reply linked list.
+ * Note: some edits to this function need to be relayed to AddReplyFromClient. */
+void _addReplyProtoToList(client *c, const char *s, size_t len) {
+    if (c->flags & CLIENT_CLOSE_AFTER_REPLY) return;
+
+    listNode *ln = listLast(c->reply);
+    clientReplyBlock *tail = ln? listNodeValue(ln): NULL;
+
+    char* comp_buf;
+    /* Note that 'tail' may be NULL even if we have a tail node, because when
+     * addReplyDeferredLen() is used, it sets a dummy node to NULL just
+     * fo fill it later, when the size of the bulk length is set. */
+
+    /* Append to tail string when possible. */
+    if (tail) {
+        if (tail->comp_flag == REPLY_BLOCK_COMPRESSED) {
+            ///if this node is already compressed we would have to create a new node as we don't know when to finish this
+            //serverLog(LL_WARNING, "[%p] id %ld len %ld size %ld used %ld  (this is already compressed)", tail, c->id, len, tail->size, tail->used);
+            goto continue_new_node;
+        }
+        /* Copy the part we can fit into the tail, and leave the rest for a
+         * new node */
+        size_t avail = tail->size - tail->used;
+        size_t copy = avail >= len? len: avail;
+        memcpy(tail->buf + tail->used, s, copy);
+        //serverLog(LL_WARNING, "[%p] id %ld len %ld size %ld used %ld avail %ld (before copy)", tail, c->id, len, tail->size, tail->used, avail);
+        tail->used += copy;
+        s += copy;
+        len -= copy;
+
+        //erverLog(LL_WARNING, "id %ld avail %ld copy %ld len %ld size %ld used %ld (before if)", c->id, avail, copy, len, tail->size, tail->used);
+        if (c->replstate == SLAVE_STATE_WAIT_BGSAVE_END && tail->size == tail->used && avail && tail->comp_flag != REPLY_BLOCK_COMPRESSED && server.client_obuf_compression) {
+            //if we have fully filled the tail node, we can compress. otherwise, we need to wait.
+            //when len == 0, it means that the node is already filled with data, thus, we can compress it.
+            //In the reply list the last node will always have some internal fragmentation if the len of the
+            //reply buffer is smaller than the PROTO_REPLY_CHUNK_BYTES
+
+            // Don't bother compressing small values
+            /*if (len < MIN_COMPRESS_BYTES) {
+                goto continue_new_node;
+             }*/
+
+            //apply the compresion algorithm to the tail->buf, so that we will compress the hole reply node.
+            //for now, it might be interesting to just add the compressed data to another buffer in the tail (e.g. tail->comp_buf)
+            //serverLog(LL_WARNING, "[%p] before compress id %ld len %ld; size %ld used %ld replystate %x (compress)", tail, c->id, len, tail->size, tail->used, c->replstate);
+            comp_buf = zmalloc(tail->size);
+            long int comprlen = compress_reply(tail->buf, comp_buf, tail->size, tail->size);
+            if (comprlen <= 0 || comprlen >= tail->size) {
+                //serverLog(LL_WARNING,"[%p] Compression failed or not efficient size %ld used %ld replystate %x (node full)", tail, tail->size, tail->used, c->replstate);
+                zfree(comp_buf);
+                goto continue_new_node;
+            }
+            //serverLog(LL_WARNING, "[%p] BGSAVE id %ld len %ld; compr %ld size %ld used %ld replystate %x (compress)", tail, c->id, len, comprlen, tail->size, tail->used, c->replstate);
+
+            memcpy(tail->buf, comp_buf, comprlen);
+            tail->used = comprlen;
+            zfree(comp_buf);
+
+            size_t old_size = tail->size;
+            tail->decomp_size = old_size;
+            tail = zrealloc(tail, tail->used + sizeof(clientReplyBlock));
+            /* take over the allocation's internal fragmentation (at least for
+            * memory usage tracking) */
+            tail->size = zmalloc_usable_size(tail) - sizeof(clientReplyBlock);
+            //tail->used = tail->size;
+            c->reply_bytes = c->reply_bytes + tail->size - old_size;
+            tail->comp_flag = REPLY_BLOCK_COMPRESSED;
+            listNodeValue(ln) = tail;
+            //serverLog(LL_WARNING, "[%p] id %ld len %ld; compr %ld size %ld used %ld reply_bytes %lld (after realloc)", tail, c->id, len, comprlen, tail->size, tail->used, c->reply_bytes);
+        }
+    }
+continue_new_node:
+    if (len) {
+        if (len >= PROTO_REPLY_CHUNK_BYTES && c->replstate == SLAVE_STATE_WAIT_BGSAVE_END && server.client_obuf_compression) { //compress everything that is greater than 16KB
+            comp_buf = zmalloc(len);
+            size_t comprlen = compress_reply(s, comp_buf, len, len);
+            if (comprlen <= 0 || comprlen >= len) {
+                //serverLog(LL_WARNING,"Compression failed or not efficient len %ld comprlen %ld replystate %x (new node)", len, comprlen, c->replstate);
+                zfree(comp_buf);
+
+                //TODO fix this ugly repetition here
+                size_t size = len < PROTO_REPLY_CHUNK_BYTES? PROTO_REPLY_CHUNK_BYTES: len;
+                tail = zmalloc(size + sizeof(clientReplyBlock));
+                /* take over the allocation's internal fragmentation */
+                tail->size = zmalloc_usable_size(tail) - sizeof(clientReplyBlock);
+                tail->used = len;
+                tail->decomp_size = 0;
+                memcpy(tail->buf, s, len);
+                listAddNodeTail(c->reply, tail);
+                c->reply_bytes += tail->size;
+
+                goto close_client;
+            }
+            tail = zmalloc(comprlen + sizeof(clientReplyBlock));
+            /* take over the allocation's internal fragmentation */
+            tail->size = zmalloc_usable_size(tail) - sizeof(clientReplyBlock);
+            tail->used = comprlen;
+            tail->decomp_size = len;
+            tail->comp_flag = REPLY_BLOCK_COMPRESSED;
+            memcpy(tail->buf, comp_buf, comprlen);
+            listAddNodeTail(c->reply, tail);
+            c->reply_bytes += tail->size;
+            zfree(comp_buf);
+            //serverLog(LL_WARNING, "[%p] BGSAVE id %ld len %ld; compr %ld size %ld used %ld replystate %x(new node compress)", tail, c->id, len, comprlen, tail->size, tail->used, c->replstate);
+            goto close_client;
+        }
+
+        /* Create a new node, make sure it is allocated to at
+        * least PROTO_REPLY_CHUNK_BYTES */
+        size_t size = len < PROTO_REPLY_CHUNK_BYTES? PROTO_REPLY_CHUNK_BYTES: len;
+        tail = zmalloc(size + sizeof(clientReplyBlock));
+        /* take over the allocation's internal fragmentation */
+        tail->size = zmalloc_usable_size(tail) - sizeof(clientReplyBlock);
+        tail->used = len;
+        tail->decomp_size = 0;
+        memcpy(tail->buf, s, len);
+        listAddNodeTail(c->reply, tail);
+        c->reply_bytes += tail->size; //Used to check the hard and soft limits.
+
+        //serverLog(LL_WARNING, "[%p] id %ld len %ld; size %ld used %ld (new node)", tail, c->id, len, tail->size, tail->used);
+close_client:
+        closeClientOnOutputBufferLimitReached(c, 1);
+
+        if (c->replstate == SLAVE_STATE_WAIT_BGSAVE_END) {
+            unsigned long used_mem = getClientOutputBufferMemoryUsage(c);
+
+            if (used_mem >= c->max_memory_used) {
+                c->max_memory_used = used_mem;
+            }
+        }
+
     }
 }
 
@@ -941,7 +1105,7 @@ void AddReplyFromClient(client *dst, client *src) {
     if (src->flags & CLIENT_CLOSE_ASAP) {
         sds client = catClientInfoString(sdsempty(),dst);
         freeClientAsync(dst);
-        serverLog(LL_WARNING,"Client %s scheduled to be closed ASAP for overcoming of output buffer limits.", client);
+        serverLog(LL_WARNING,"AddReplyFromClient Client %s scheduled to be closed ASAP for overcoming of output buffer limits.", client);
         sdsfree(client);
         return;
     }
@@ -1533,7 +1697,36 @@ int writeToClient(client *c, int handler_installed) {
                 continue;
             }
 
-            nwritten = connWrite(c->conn, o->buf + c->sentlen, objlen - c->sentlen);
+            /*if (listLength(c->reply) >= 100) {
+                serverLog(LL_WARNING, "id %ld flags %x reply state %x reply size %ld compresion %d used memory %ld", c->id, c->flags, c->replstate, listLength(c->reply), server.client_obuf_compression, getClientOutputBufferMemoryUsage(c));
+            }*/
+
+            if (c->flags & CLIENT_SLAVE && o->comp_flag == REPLY_BLOCK_COMPRESSED && server.client_obuf_compression) {
+                //Decompress here and send it on the wire.
+                void *decompressed = zmalloc(o->decomp_size);
+                long int decompressed_len = 0;
+                ;
+                if ((decompressed_len = decompress_reply(o->buf, decompressed, o->used, o->decomp_size)) <= 0) {
+                    /* Someone requested decompress, but we can't decompress.  Not good. */
+                    serverLog(LL_WARNING,"[%p] id %ld Decompression failed: used %ld size %ld decompsize %ld decomplen %ld", o, c->id, o->used, o->size, o->decomp_size, decompressed_len);
+                    zfree(decompressed);
+
+                    c->reply_bytes -= o->size;
+                    listDelNode(c->reply,listFirst(c->reply));
+                    c->sentlen = 0;
+                    return C_ERR;
+                }
+                objlen = decompressed_len; //update the objlen to the decompressed len.
+
+                nwritten = connWrite(c->conn, decompressed + c->sentlen, decompressed_len - c->sentlen);
+                //serverLog(LL_WARNING, "[%p] id %ld write %ld dcomp %ld size %ld used %ld decompsize %ld sentlen %ld", o, c->id, nwritten, decompressed_len, o->size, objlen, o->decomp_size, c->sentlen);
+                zfree(decompressed);
+            }
+            else {
+                nwritten = connWrite(c->conn, o->buf + c->sentlen, objlen - c->sentlen);
+                //serverLog(LL_WARNING, "[%p] id %ld write %ld size %ld used %ld decompsize %ld (not compressed)", o, c->id, nwritten, o->size, objlen, o->decomp_size);
+            }
+
             if (nwritten <= 0) break;
             c->sentlen += nwritten;
             totwritten += nwritten;
@@ -1545,8 +1738,10 @@ int writeToClient(client *c, int handler_installed) {
                 c->sentlen = 0;
                 /* If there are no longer objects in the list, we expect
                  * the count of reply bytes to be exactly zero. */
-                if (listLength(c->reply) == 0)
+                if (listLength(c->reply) == 0) {
+                    //serverLog(LL_WARNING, "Delete node. sentlen %ld objlen %ld size %ld reply_bytes %ld", c->sentlen, objlen, o->size, c->reply_bytes);
                     serverAssert(c->reply_bytes == 0);
+                }
             }
         }
         /* Note that we avoid to send more than NET_MAX_WRITES_PER_EVENT
@@ -2736,8 +2931,8 @@ NULL
                 type = CLIENT_PAUSE_ALL;
             } else {
                 addReplyError(c,
-                    "CLIENT PAUSE mode must be WRITE or ALL");  
-                return;       
+                    "CLIENT PAUSE mode must be WRITE or ALL");
+                return;
             }
         }
 
@@ -2924,7 +3119,7 @@ NULL
             numflags++;
             if (c->flags & CLIENT_TRACKING_CACHING) {
                 addReplyBulkCString(c,"caching-yes");
-                numflags++;        
+                numflags++;
             }
         }
         if (c->flags & CLIENT_TRACKING_OPTOUT) {
@@ -2932,7 +3127,7 @@ NULL
             numflags++;
             if (c->flags & CLIENT_TRACKING_CACHING) {
                 addReplyBulkCString(c,"caching-no");
-                numflags++;        
+                numflags++;
             }
         }
         if (c->flags & CLIENT_TRACKING_NOLOOP) {
@@ -3127,6 +3322,13 @@ void replaceClientCommandVector(client *c, int argc, robj **argv) {
     serverAssertWithInfo(c,NULL,c->cmd != NULL);
 }
 
+int getCompressionByType(char* compression) {
+    if (!strcasecmp(compression,"no")) return CLIENT_OBUF_NO_COMPRESSION;
+    else if (!strcasecmp(compression,"lzf")) return CLIENT_OBUF_LZF_COMPRESSION;
+    else if (!strcasecmp(compression,"lz4")) return CLIENT_OBUF_LZ4_COMPRESSION;
+    else return -1;
+}
+
 /* Rewrite a single item in the command vector.
  * The new val ref count is incremented, and the old decremented.
  *
@@ -3218,6 +3420,10 @@ char *getClientTypeName(int class) {
 int checkClientOutputBufferLimits(client *c) {
     int soft = 0, hard = 0, class;
     unsigned long used_mem = getClientOutputBufferMemoryUsage(c);
+
+    /*if (c->replstate == SLAVE_STATE_WAIT_BGSAVE_END) {
+         serverLog(LL_WARNING, "used_mem %ld", used_mem);
+    }*/
 
     class = getClientType(c);
     /* For the purpose of output buffer limiting, masters are handled
@@ -3332,7 +3538,7 @@ void flushSlavesOutputBuffers(void) {
  * A main use case of this function is to allow pausing replication traffic
  * so that a failover without data loss to occur. Replicas will continue to receive
  * traffic to faciliate this functionality.
- * 
+ *
  * This function is also internally used by Redis Cluster for the manual
  * failover procedure implemented by CLUSTER FAILOVER.
  *
@@ -3362,7 +3568,7 @@ void unpauseClients(void) {
     listNode *ln;
     listIter li;
     client *c;
-    
+
     server.client_pause_type = CLIENT_PAUSE_OFF;
     server.client_pause_end_time = 0;
 
@@ -3374,13 +3580,13 @@ void unpauseClients(void) {
     }
 }
 
-/* Returns true if clients are paused and false otherwise. */ 
+/* Returns true if clients are paused and false otherwise. */
 int areClientsPaused(void) {
     return server.client_pause_type != CLIENT_PAUSE_OFF;
 }
 
 /* Checks if the current client pause has elapsed and unpause clients
- * if it has. Also returns true if clients are now paused and false 
+ * if it has. Also returns true if clients are now paused and false
  * otherwise. */
 int checkClientPauseTimeoutAndReturnIfPaused(void) {
     if (!areClientsPaused())
@@ -3684,7 +3890,7 @@ int postponeClientRead(client *c) {
     if (server.io_threads_active &&
         server.io_threads_do_reads &&
         !ProcessingEventsWhileBlocked &&
-        !(c->flags & (CLIENT_MASTER|CLIENT_SLAVE|CLIENT_PENDING_READ|CLIENT_BLOCKED))) 
+        !(c->flags & (CLIENT_MASTER|CLIENT_SLAVE|CLIENT_PENDING_READ|CLIENT_BLOCKED)))
     {
         c->flags |= CLIENT_PENDING_READ;
         listAddNodeHead(server.clients_pending_read,c);

@@ -2723,6 +2723,8 @@ void initServerConfig(void) {
     for (j = 0; j < CLIENT_TYPE_OBUF_COUNT; j++)
         server.client_obuf_limits[j] = clientBufferLimitsDefaults[j];
 
+    server.client_obuf_compression = CLIENT_OBUF_NO_COMPRESSION;
+
     /* Linux OOM Score config */
     for (j = 0; j < CONFIG_OOM_COUNT; j++)
         server.oom_score_adj_values[j] = configOOMScoreAdjValuesDefaults[j];
@@ -5202,6 +5204,8 @@ sds genRedisInfoString(const char *section) {
                     "offset=%lld,lag=%ld\r\n",
                     slaveid,slaveip,slave->slave_listening_port,state,
                     slave->repl_ack_off, lag);
+                info = sdscatprintf(info,
+                    "max_mem_used=%lld\r\n", slave->max_memory_used);
                 slaveid++;
             }
         }
