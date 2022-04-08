@@ -246,7 +246,7 @@ typedef struct standardConfig {
     typeData data; /* The type specific data exposed used by the interface */
 } standardConfig;
 
-#define MODIFIABLE_CONFIG 0 /* This is the implied default for a standard 
+#define MODIFIABLE_CONFIG 0 /* This is the implied default for a standard
                              * config, which is mutable. */
 #define IMMUTABLE_CONFIG (1ULL<<0) /* Can this value only be set at startup? */
 #define SENSITIVE_CONFIG (1ULL<<1) /* Does this value contain sensitive information */
@@ -361,7 +361,7 @@ static int updateOOMScoreAdjValues(sds *args, const char **err, int apply) {
         old_values[i] = server.oom_score_adj_values[i];
         server.oom_score_adj_values[i] = values[i];
     }
-    
+
     /* When parsing the config file, we want to apply only when all is done. */
     if (!apply)
         return C_OK;
@@ -575,7 +575,16 @@ void loadServerConfigFromString(char *config) {
             server.client_obuf_limits[class].hard_limit_bytes = hard;
             server.client_obuf_limits[class].soft_limit_bytes = soft;
             server.client_obuf_limits[class].soft_limit_seconds = soft_seconds;
-        } else if (!strcasecmp(argv[0],"oom-score-adj-values") && argc == 1 + CONFIG_OOM_COUNT) {
+        } else if (!strcasecmp(argv[0],"replica-output-buffer-compression") && argc == 2) {
+            int compression_type = getCompressionByType(argv[1]);
+
+            if (compression_type < 0) {
+                err = "Unkown compression type for client output buffer";
+                goto loaderr;
+            }
+            server.client_obuf_compression = compression_type;
+        }
+         else if (!strcasecmp(argv[0],"oom-score-adj-values") && argc == 1 + CONFIG_OOM_COUNT) {
             if (updateOOMScoreAdjValues(&argv[1], &err, 0) == C_ERR) goto loaderr;
         } else if (!strcasecmp(argv[0],"notify-keyspace-events") && argc == 2) {
             int flags = keyspaceEventsStringToFlags(argv[1]);
@@ -721,7 +730,7 @@ void configSetCommand(client *c) {
 
     /* Iterate the configs that are standard */
     for (standardConfig *config = configs; config->name != NULL; config++) {
-        if (!(config->flags & IMMUTABLE_CONFIG) && 
+        if (!(config->flags & IMMUTABLE_CONFIG) &&
             (!strcasecmp(c->argv[2]->ptr,config->name) ||
             (config->alias && !strcasecmp(c->argv[2]->ptr,config->alias))))
         {
@@ -840,6 +849,19 @@ void configSetCommand(client *c) {
             server.client_obuf_limits[class].soft_limit_seconds = soft_seconds;
         }
         sdsfreesplitres(v,vlen);
+    } config_set_special_field("replica-output-buffer-compression") {
+        int vlen;
+        sds *v = sdssplitlen(o->ptr,sdslen(o->ptr)," ",1,&vlen);
+
+        int compression_type = getCompressionByType(v[0]);
+        if (compression_type < 0) {
+            sdsfreesplitres(v,vlen);
+            goto badfmt;
+        }
+        server.client_obuf_compression = compression_type;
+
+        sdsfreesplitres(v,vlen);
+
     } config_set_special_field("oom-score-adj-values") {
         int vlen;
         int success = 1;
@@ -1193,7 +1215,7 @@ struct rewriteConfigState *rewriteConfigReadOldFile(char *path) {
             sdsfree(argv[0]);
             argv[0] = alt;
         }
-        /* If this is sentinel config, we use sentinel "sentinel <config>" as option 
+        /* If this is sentinel config, we use sentinel "sentinel <config>" as option
             to avoid messing up the sequence. */
         if (server.sentinel_mode && argc > 1 && !strcasecmp(argv[0],"sentinel")) {
             sds sentinelOption = sdsempty();

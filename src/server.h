@@ -306,6 +306,11 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
                                     buffer configuration. Just the first
                                     three: normal, slave, pubsub. */
 
+/* Compression types for the client output buffer*/
+#define CLIENT_OBUF_NO_COMPRESSION  0
+#define CLIENT_OBUF_LZF_COMPRESSION 1
+#define CLIENT_OBUF_LZ4_COMPRESSION 2
+
 /* Slave replication state. Used in server.repl_state for slaves to remember
  * what to do next. */
 typedef enum {
@@ -700,8 +705,11 @@ struct evictionPoolEntry; /* Defined in evict.c */
 
 /* This structure is used in order to represent the output buffer of a client,
  * which is actually a linked list of blocks like that, that is: client->reply. */
+
+#define REPLY_BLOCK_COMPRESSED     1
+#define REPLY_BLOCK_NO_COMPRESSION 0
 typedef struct clientReplyBlock {
-    size_t size, used;
+    size_t size, used, comp_flag, decomp_size;
     char buf[];
 } clientReplyBlock;
 
@@ -884,6 +892,7 @@ typedef struct client {
     unsigned long long reply_bytes; /* Tot bytes of objects in reply list. */
     size_t sentlen;         /* Amount of bytes already sent in the current
                                buffer or object being sent. */
+    unsigned long long max_memory_used;
     time_t ctime;           /* Client creation time. */
     long duration;          /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
     time_t lastinteraction; /* Time of the last interaction, used for timeout */
@@ -1334,6 +1343,7 @@ struct redisServer {
     int set_proc_title;             /* True if change proc title */
     char *proc_title_template;      /* Process title template format */
     clientBufferLimitsConfig client_obuf_limits[CLIENT_TYPE_OBUF_COUNT];
+    int client_obuf_compression;   /* Compression type for the reply buffer list for replica */
     /* AOF persistence */
     int aof_enabled;                /* AOF configuration */
     int aof_state;                  /* AOF_(ON|OFF|WAIT_REWRITE) */
@@ -1870,6 +1880,7 @@ void redactClientCommandArgument(client *c, int argc);
 unsigned long getClientOutputBufferMemoryUsage(client *c);
 int freeClientsInAsyncFreeQueue(void);
 int closeClientOnOutputBufferLimitReached(client *c, int async);
+int getCompressionByType(char* compression);
 int getClientType(client *c);
 int getClientTypeByName(char *name);
 char *getClientTypeName(int class);

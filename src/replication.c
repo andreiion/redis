@@ -1044,6 +1044,7 @@ void putSlaveOnline(client *slave) {
                           NULL);
     serverLog(LL_NOTICE,"Synchronization with replica %s succeeded",
         replicationGetSlaveName(slave));
+    //serverLog(LL_NOTICE, "max_memory_used %lld", slave->max_memory_used); 
 }
 
 /* We call this function periodically to remove an RDB file that was
