@@ -52,7 +52,6 @@
 #include <openssl/err.h>
 #include <hiredis_ssl.h>
 #endif
-#include <lmdb.h>
 #include "adlist.h"
 #include "dict.h"
 #include "zmalloc.h"
@@ -1760,6 +1759,9 @@ struct sigaction sigact;
 sigset_t waitset;
 siginfo_t info;
 
+int string_set_real_data(redisContext *ctx, redisReply *keys_reply, int mget_size);
+int string_mset_real_data(redisContext *ctx, redisReply *keys_reply, int mget_size);
+
 int wait_send_signal() {
     int result = 0;
 
@@ -1805,7 +1807,6 @@ int bg_get_string_data(redisContext *c, redisContext *ctx, redisReply *reply)
 
 }
 
-
 char* create_MGET_MSET_redis_cmd(const char* command_type, redisReply *key_reply, redisReply *value_reply, int request, int *len)
 {
     //len = redisFormatCommand(&cmd, "%s %s",command_type, key_reply->element[cmd_size * request + i - 1]->str);
@@ -1846,11 +1847,10 @@ int string_get_real_data(redisContext *c, redisContext *ctx, redisReply *reply)
     redisReply **rep;
 
     rep = zmalloc(reply->elements * sizeof(redisReply*));
-    int j = 0;
+    int j = 0, avereage_key_size = 0, average_value_size = 0;
     size_t mget_size = 20;
     int reply_it = 0;
     clock_gettime( CLOCK_REALTIME, &start);
-    printf("reply_it should be %d\n", (reply->elements - mget_size) / mget_size);
     for (j = 0; j < reply->elements - mget_size; j = j + mget_size) {
         rep[reply_it] = redisCommand(c,"MGET %s %s %s %s %s %s %s %s %s %s \
                                    %s %s %s %s %s %s %s %s %s %s", reply->element[j]->str,      reply->element[j + 1]->str,
@@ -1863,7 +1863,6 @@ int string_get_real_data(redisContext *c, redisContext *ctx, redisReply *reply)
                                                                    reply->element[j + 14]->str, reply->element[j + 15]->str,
                                                                    reply->element[j + 16]->str, reply->element[j + 17]->str,
                                                                    reply->element[j + 18]->str, reply->element[j + 19]->str);
-
         if (rep[reply_it]->type == REDIS_REPLY_ERROR) {
             printf("Error: %s\n", rep[reply_it]->str);
             return -1;
@@ -1871,11 +1870,16 @@ int string_get_real_data(redisContext *c, redisContext *ctx, redisReply *reply)
             printf("Error: %s\n", rep[reply_it]->str);
             return -1;
         }
+        for(int i = 0; i < mget_size; ++i) {
+            avereage_key_size += reply->element[j + i]->len;
+            average_value_size += rep[reply_it]->element[i]->len;
+        }
+
         reply_it++;
     }
     clock_gettime( CLOCK_REALTIME, &stop);
     sec = ( stop.tv_sec - start.tv_sec ) + ( stop.tv_nsec - start.tv_nsec ) / 1000000000;
-    printf("done processed %ld MGETs in %f sec \n", reply_it, sec);
+    printf("done processed %ld MGETs in %f sec (key avg size %d; value avg size %d\n", reply_it, sec, avereage_key_size / j, average_value_size / j);
 
     if (test_is_selected("real_data_string_mset")) {
         config.requests = reply_it - 1;
@@ -1888,58 +1892,13 @@ int string_get_real_data(redisContext *c, redisContext *ctx, redisReply *reply)
     printf(" calc reply_it %d actual %d\n", (reply->elements - mget_size) / mget_size, reply_it);
     wait_send_signal();
 
-    //string_set_real_data(ctx, reply, mget_size);
-    //benchmark("MSET","PING\r\n",6);
-    //benchmark("MSET","PING\r\n",6);
-}
-
-int string_cset_real_data(redisContext *ctx, redisReply *keys_reply, int mget_size)
-{
-    struct timespec start, stop;
-    double sec;
-
-    redisReply *set_reply;
-    redisReply **rep = config.val_reply;
-
-    clock_gettime( CLOCK_REALTIME, &start);
-    int reply_it = 0;
-    int j = 0;
-    for (j = 0; j < keys_reply->elements - mget_size; j = j + mget_size) {
-        //set_reply = redisCommand(ctx,"SET %s %b", reply->element[j]->str, rep[j]->str, rep[j]->len);
-        //printf("rep '%s'\n", rep[reply_it]->str);
-        //printf("rep '%s' '%s'\n", rep[reply_it]->element[0]->str, rep[reply_it]->element[1]);
-        set_reply = redisCommand(ctx,"MSET %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b",
-                                                             keys_reply->element[j]->str,      rep[reply_it]->element[0]->str,      rep[reply_it]->element[0]->len,
-                                                             keys_reply->element[j + 1]->str,  rep[reply_it]->element[1]->str,      rep[reply_it]->element[1]->len,
-                                                             keys_reply->element[j + 2]->str,  rep[reply_it]->element[2]->str,      rep[reply_it]->element[2]->len,
-                                                             keys_reply->element[j + 3]->str,  rep[reply_it]->element[3]->str,      rep[reply_it]->element[3]->len,
-                                                             keys_reply->element[j + 4]->str,  rep[reply_it]->element[4]->str,      rep[reply_it]->element[4]->len,
-                                                             keys_reply->element[j + 5]->str,  rep[reply_it]->element[5]->str,      rep[reply_it]->element[5]->len,
-                                                             keys_reply->element[j + 6]->str,  rep[reply_it]->element[6]->str,      rep[reply_it]->element[6]->len,
-                                                             keys_reply->element[j + 7]->str,  rep[reply_it]->element[7]->str,      rep[reply_it]->element[7]->len,
-                                                             keys_reply->element[j + 8]->str,  rep[reply_it]->element[8]->str,      rep[reply_it]->element[8]->len,
-                                                             keys_reply->element[j + 9]->str,  rep[reply_it]->element[9]->str,      rep[reply_it]->element[9]->len);
-        freeReplyObject(set_reply);
-
-        set_reply = redisCommand(ctx,"MSET %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b",
-                                                             keys_reply->element[j + 10]->str,  rep[reply_it]->element[10]->str,      rep[reply_it]->element[10]->len,
-                                                             keys_reply->element[j + 11]->str,  rep[reply_it]->element[11]->str,      rep[reply_it]->element[11]->len,
-                                                             keys_reply->element[j + 12]->str,  rep[reply_it]->element[12]->str,      rep[reply_it]->element[12]->len,
-                                                             keys_reply->element[j + 13]->str,  rep[reply_it]->element[13]->str,      rep[reply_it]->element[13]->len,
-                                                             keys_reply->element[j + 14]->str,  rep[reply_it]->element[14]->str,      rep[reply_it]->element[14]->len,
-                                                             keys_reply->element[j + 15]->str,  rep[reply_it]->element[15]->str,      rep[reply_it]->element[15]->len,
-                                                             keys_reply->element[j + 16]->str,  rep[reply_it]->element[16]->str,      rep[reply_it]->element[16]->len,
-                                                             keys_reply->element[j + 17]->str,  rep[reply_it]->element[17]->str,      rep[reply_it]->element[17]->len,
-                                                             keys_reply->element[j + 18]->str,  rep[reply_it]->element[18]->str,      rep[reply_it]->element[18]->len,
-                                                             keys_reply->element[j + 19]->str,  rep[reply_it]->element[19]->str,      rep[reply_it]->element[19]->len);
-        freeReplyObject(rep[reply_it]);
-        freeReplyObject(set_reply);
-        reply_it++;
+    if (test_is_selected("real_data_string_slow_mset")) {
+        string_mset_real_data(ctx, reply, mget_size);
     }
-    clock_gettime( CLOCK_REALTIME, &stop);
-    sec = ( stop.tv_sec - start.tv_sec ) + ( stop.tv_nsec - start.tv_nsec ) / 1000000000;
-    printf("done processed %ld SETs in %f sec \n", j, sec);
-    zfree(rep);
+
+    if (test_is_selected("real_data_string_slow_set")) {
+        string_set_real_data(ctx, reply, mget_size);
+    }
 }
 
 int string_set_real_data(redisContext *ctx, redisReply *keys_reply, int mget_size)
@@ -1953,157 +1912,69 @@ int string_set_real_data(redisContext *ctx, redisReply *keys_reply, int mget_siz
     clock_gettime( CLOCK_REALTIME, &start);
     int reply_it = 0;
     int j = 0;
+    for(j = 0; j < keys_reply->elements - mget_size; j = j + mget_size) {
+        for(int i = 0; i < mget_size; ++i) {
+            set_reply = redisCommand(ctx,"MSET %s %b", keys_reply->element[j]->str, rep[reply_it]->element[i]->str, rep[reply_it]->element[i]->len);
+            freeReplyObject(set_reply);
+        }
+
+        freeReplyObject(rep[reply_it]);
+        reply_it++;
+    }
+    clock_gettime( CLOCK_REALTIME, &stop);
+    sec = ( stop.tv_sec - start.tv_sec ) + ( stop.tv_nsec - start.tv_nsec ) / 1000000000;
+    printf("done processed %ld SETs in %f sec\n", j, sec);
+    zfree(rep);
+}
+int string_mset_real_data(redisContext *ctx, redisReply *keys_reply, int mget_size)
+{
+    struct timespec start, stop;
+    double sec;
+
+    redisReply *set_reply;
+    redisReply **rep = config.val_reply;
+
+    clock_gettime( CLOCK_REALTIME, &start);
+    int reply_it = 0;
+    int j = 0;
     for (j = 0; j < keys_reply->elements - mget_size; j = j + mget_size) {
         //set_reply = redisCommand(ctx,"SET %s %b", reply->element[j]->str, rep[j]->str, rep[j]->len);
         //printf("rep '%s'\n", rep[reply_it]->str);
         //printf("rep '%s' '%s'\n", rep[reply_it]->element[0]->str, rep[reply_it]->element[1]);
         set_reply = redisCommand(ctx,"MSET %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b",
-                                                             keys_reply->element[j]->str,      rep[reply_it]->element[0]->str,      rep[reply_it]->element[0]->len,
-                                                             keys_reply->element[j + 1]->str,  rep[reply_it]->element[1]->str,      rep[reply_it]->element[1]->len,
-                                                             keys_reply->element[j + 2]->str,  rep[reply_it]->element[2]->str,      rep[reply_it]->element[2]->len,
-                                                             keys_reply->element[j + 3]->str,  rep[reply_it]->element[3]->str,      rep[reply_it]->element[3]->len,
-                                                             keys_reply->element[j + 4]->str,  rep[reply_it]->element[4]->str,      rep[reply_it]->element[4]->len,
-                                                             keys_reply->element[j + 5]->str,  rep[reply_it]->element[5]->str,      rep[reply_it]->element[5]->len,
-                                                             keys_reply->element[j + 6]->str,  rep[reply_it]->element[6]->str,      rep[reply_it]->element[6]->len,
-                                                             keys_reply->element[j + 7]->str,  rep[reply_it]->element[7]->str,      rep[reply_it]->element[7]->len,
-                                                             keys_reply->element[j + 8]->str,  rep[reply_it]->element[8]->str,      rep[reply_it]->element[8]->len,
-                                                             keys_reply->element[j + 9]->str,  rep[reply_it]->element[9]->str,      rep[reply_it]->element[9]->len);
+                                                             keys_reply->element[j]->str,     rep[reply_it]->element[0]->str, rep[reply_it]->element[0]->len,
+                                                             keys_reply->element[j + 1]->str, rep[reply_it]->element[1]->str, rep[reply_it]->element[1]->len,
+                                                             keys_reply->element[j + 2]->str, rep[reply_it]->element[2]->str, rep[reply_it]->element[2]->len,
+                                                             keys_reply->element[j + 3]->str, rep[reply_it]->element[3]->str, rep[reply_it]->element[3]->len,
+                                                             keys_reply->element[j + 4]->str, rep[reply_it]->element[4]->str, rep[reply_it]->element[4]->len,
+                                                             keys_reply->element[j + 5]->str, rep[reply_it]->element[5]->str, rep[reply_it]->element[5]->len,
+                                                             keys_reply->element[j + 6]->str, rep[reply_it]->element[6]->str, rep[reply_it]->element[6]->len,
+                                                             keys_reply->element[j + 7]->str, rep[reply_it]->element[7]->str, rep[reply_it]->element[7]->len,
+                                                             keys_reply->element[j + 8]->str, rep[reply_it]->element[8]->str, rep[reply_it]->element[8]->len,
+                                                             keys_reply->element[j + 9]->str, rep[reply_it]->element[9]->str, rep[reply_it]->element[9]->len);
         freeReplyObject(set_reply);
 
         set_reply = redisCommand(ctx,"MSET %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b",
-                                                             keys_reply->element[j + 10]->str,  rep[reply_it]->element[10]->str,      rep[reply_it]->element[10]->len,
-                                                             keys_reply->element[j + 11]->str,  rep[reply_it]->element[11]->str,      rep[reply_it]->element[11]->len,
-                                                             keys_reply->element[j + 12]->str,  rep[reply_it]->element[12]->str,      rep[reply_it]->element[12]->len,
-                                                             keys_reply->element[j + 13]->str,  rep[reply_it]->element[13]->str,      rep[reply_it]->element[13]->len,
-                                                             keys_reply->element[j + 14]->str,  rep[reply_it]->element[14]->str,      rep[reply_it]->element[14]->len,
-                                                             keys_reply->element[j + 15]->str,  rep[reply_it]->element[15]->str,      rep[reply_it]->element[15]->len,
-                                                             keys_reply->element[j + 16]->str,  rep[reply_it]->element[16]->str,      rep[reply_it]->element[16]->len,
-                                                             keys_reply->element[j + 17]->str,  rep[reply_it]->element[17]->str,      rep[reply_it]->element[17]->len,
-                                                             keys_reply->element[j + 18]->str,  rep[reply_it]->element[18]->str,      rep[reply_it]->element[18]->len,
-                                                             keys_reply->element[j + 19]->str,  rep[reply_it]->element[19]->str,      rep[reply_it]->element[19]->len);
+                                                             keys_reply->element[j + 10]->str, rep[reply_it]->element[10]->str, rep[reply_it]->element[10]->len,
+                                                             keys_reply->element[j + 11]->str, rep[reply_it]->element[11]->str, rep[reply_it]->element[11]->len,
+                                                             keys_reply->element[j + 12]->str, rep[reply_it]->element[12]->str, rep[reply_it]->element[12]->len,
+                                                             keys_reply->element[j + 13]->str, rep[reply_it]->element[13]->str, rep[reply_it]->element[13]->len,
+                                                             keys_reply->element[j + 14]->str, rep[reply_it]->element[14]->str, rep[reply_it]->element[14]->len,
+                                                             keys_reply->element[j + 15]->str, rep[reply_it]->element[15]->str, rep[reply_it]->element[15]->len,
+                                                             keys_reply->element[j + 16]->str, rep[reply_it]->element[16]->str, rep[reply_it]->element[16]->len,
+                                                             keys_reply->element[j + 17]->str, rep[reply_it]->element[17]->str, rep[reply_it]->element[17]->len,
+                                                             keys_reply->element[j + 18]->str, rep[reply_it]->element[18]->str, rep[reply_it]->element[18]->len,
+                                                             keys_reply->element[j + 19]->str, rep[reply_it]->element[19]->str, rep[reply_it]->element[19]->len);
         freeReplyObject(rep[reply_it]);
         freeReplyObject(set_reply);
         reply_it++;
     }
     clock_gettime( CLOCK_REALTIME, &stop);
     sec = ( stop.tv_sec - start.tv_sec ) + ( stop.tv_nsec - start.tv_nsec ) / 1000000000;
-    printf("done processed %ld SETs in %f sec \n", j, sec);
+    printf("done processed %ld MSETs in %f sec \n", j, sec);
     zfree(rep);
 }
 
-int get_and_set_string_data(redisContext *c, redisContext *ctx, redisReply *reply)
-{
-    redisReply *rep, *set_reply;
-
-    struct timespec start, stop;
-    double sec;
-
-    size_t j = 0;
-    size_t total_strings_size = 0;
-    size_t mget_size = 20;
-    clock_gettime( CLOCK_REALTIME, &start);
-    while (j + mget_size - 1 < reply->elements) {
-        rep = redisCommand(c,"MGET %s %s %s %s %s %s %s %s %s %s \
-                                   %s %s %s %s %s %s %s %s %s %s", reply->element[j]->str,
-                                                                   reply->element[j + 1]->str,
-                                                                   reply->element[j + 2]->str,
-                                                                   reply->element[j + 3]->str,
-                                                                   reply->element[j + 4]->str,
-                                                                   reply->element[j + 5]->str,
-                                                                   reply->element[j + 6]->str,
-                                                                   reply->element[j + 7]->str,
-                                                                   reply->element[j + 8]->str,
-                                                                   reply->element[j + 9]->str,
-                                                                   reply->element[j + 10]->str,
-                                                                   reply->element[j + 11]->str,
-                                                                   reply->element[j + 12]->str,
-                                                                   reply->element[j + 13]->str,
-                                                                   reply->element[j + 14]->str,
-                                                                   reply->element[j + 15]->str,
-                                                                   reply->element[j + 16]->str,
-                                                                   reply->element[j + 17]->str,
-                                                                   reply->element[j + 18]->str,
-                                                                   reply->element[j + 19]->str);
-        if (rep->type == REDIS_REPLY_ERROR) {
-            printf("Error: %s\n", rep->str);
-            return -1;
-        } else if (rep->type != REDIS_REPLY_ARRAY) {
-            printf("Error: %s\n", rep->str);
-            return -1;
-        }
-
-        if (rep->elements != mget_size) {
-            fprintf(stderr, "rep->element is %ld\n", rep->elements);
-            return -1;
-        }
-
-        for (int i = 0; i < mget_size; ++i) {
-             total_strings_size += rep->element[i]->len;
-        }
-
-        for (int i = 0; i < mget_size; i=i+10) {
-
-            //printf("[%d] '%s' val '%s' (len %d)\n", j + i, reply->element[j + i]->str, rep->element[i]->str, rep->element[i]->len);
-            set_reply = redisCommand(ctx,"MSET %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b",
-                                                             reply->element[j + i]->str,      rep->element[i]->str,     rep->element[i]->len,
-                                                             reply->element[j + i + 1]->str,  rep->element[i + 1]->str, rep->element[i + 1]->len,
-                                                             reply->element[j + i + 2]->str,  rep->element[i + 2]->str, rep->element[i + 2]->len,
-                                                             reply->element[j + i + 3]->str,  rep->element[i + 3]->str, rep->element[i + 3]->len,
-                                                             reply->element[j + i + 4]->str,  rep->element[i + 4]->str, rep->element[i + 4]->len,
-                                                             reply->element[j + i + 5]->str,  rep->element[i + 5]->str, rep->element[i + 5]->len,
-                                                             reply->element[j + i + 6]->str,  rep->element[i + 6]->str, rep->element[i + 6]->len,
-                                                             reply->element[j + i + 7]->str,  rep->element[i + 7]->str, rep->element[i + 7]->len,
-                                                             reply->element[j + i + 8]->str,  rep->element[i + 8]->str, rep->element[i + 8]->len,
-                                                             reply->element[j + i + 9]->str,  rep->element[i + 9]->str, rep->element[i + 9]->len);
-
-            if (rep->type == REDIS_REPLY_ERROR) {
-                printf("Error: %s\n", rep->str);
-                return -1;
-            }
-            freeReplyObject(set_reply);
-        }
-       /* set_reply = redisCommand(ctx,"MSET %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b \
-                                           %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b %s %b",
-                                            reply->element[j]->str,     rep->element[0]->str,   rep->element[0]->len,
-                                            reply->element[j + 1]->str, rep->element[1]->str,   rep->element[1]->len,
-                                            reply->element[j + 2]->str, rep->element[2]->str,   rep->element[2]->len,
-                                            reply->element[j + 3]->str, rep->element[3]->str,   rep->element[3]->len,
-                                            reply->element[j + 4]->str, rep->element[4]->str,   rep->element[4]->len,
-                                            reply->element[j + 5]->str, rep->element[5]->str,   rep->element[5]->len,
-                                            reply->element[j + 6]->str, rep->element[6]->str,   rep->element[6]->len,
-                                            reply->element[j + 7]->str, rep->element[7]->str,   rep->element[7]->len,
-                                            reply->element[j + 8]->str, rep->element[8]->str,   rep->element[8]->len,
-                                            reply->element[j + 10]->str, rep->element[10]->str, rep->element[10]->len,
-                                            reply->element[j + 11]->str, rep->element[11]->str, rep->element[11]->len,
-                                            reply->element[j + 12]->str, rep->element[12]->str, rep->element[12]->len,
-                                            reply->element[j + 13]->str, rep->element[13]->str, rep->element[13]->len,
-                                            reply->element[j + 14]->str, rep->element[14]->str, rep->element[14]->len,
-                                            reply->element[j + 15]->str, rep->element[15]->str, rep->element[15]->len,
-                                            reply->element[j + 16]->str, rep->element[16]->str, rep->element[16]->len,
-                                            reply->element[j + 17]->str, rep->element[17]->str, rep->element[17]->len,
-                                            reply->element[j + 18]->str, rep->element[18]->str, rep->element[18]->len,
-                                            reply->element[j + 19]->str, rep->element[19]->str, rep->element[19]->len);
-
-        if (rep->type == REDIS_REPLY_ERROR) {
-            printf("Error: %s\n", rep->str);
-            return -1;
-        }
-        freeReplyObject(set_reply);*/
-
-        j = j + mget_size;
-        freeReplyObject(rep);
-    }
-
-    clock_gettime( CLOCK_REALTIME, &stop);
-    sec = ( stop.tv_sec - start.tv_sec )
-          + ( stop.tv_nsec - start.tv_nsec )
-            / 1000000000;
-    printf("done processed %ld SETs (total size %ld) (avg size %ld) in %f sec \n", j, total_strings_size, total_strings_size / j, sec);
-
-
-
-    return 0;
-}
 int real_db_size = 2056608;
 
 int get_and_set_hash_data(redisContext *c, redisContext *ctx, redisReply *reply)
@@ -2482,6 +2353,14 @@ int main(int argc, const char **argv) {
             config.real_data_test = 1;
             redis_real_data_scan_keys("string");
             benchmark("SET", NULL, 0);
+        }
+
+        if (test_is_selected("real_data_string_slow_set")) {
+            redis_real_data_scan_keys("string");
+        }
+
+        if (test_is_selected("real_data_string_slow_mset")) {
+            redis_real_data_scan_keys("string");
         }
 
         if (test_is_selected("real_data_hash")) {
