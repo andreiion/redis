@@ -1889,7 +1889,7 @@ int string_get_real_data(redisContext *c, redisContext *ctx, redisReply *reply)
     }
     config.val_reply_count = 0;
     config.val_reply = rep;
-    printf(" calc reply_it %d actual %d\n", (reply->elements - mget_size) / mget_size, reply_it);
+    //printf(" calc reply_it %d actual %d\n", (reply->elements - mget_size) / mget_size, reply_it);
     wait_send_signal();
 
     if (test_is_selected("real_data_string_slow_mset")) {
