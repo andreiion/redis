@@ -413,14 +413,6 @@ void _addReplyProtoToList(client *c, const char *s, size_t len) {
             //In the reply list the last node will always have some internal fragmentation if the len of the
             //reply buffer is smaller than the PROTO_REPLY_CHUNK_BYTES
 
-<<<<<<< HEAD
-=======
-            // Don't bother compressing small values
-            /*if (len < MIN_COMPRESS_BYTES) {
-                goto continue_new_node;
-             }*/
-
->>>>>>> 73e20a4c51b1aab328652bdaf93a0cf5b194706a
             //apply the compresion algorithm to the tail->buf, so that we will compress the hole reply node.
             //for now, it might be interesting to just add the compressed data to another buffer in the tail (e.g. tail->comp_buf)
             //serverLog(LL_WARNING, "[%p] before compress id %ld len %ld; size %ld used %ld replystate %x (compress)", tail, c->id, len, tail->size, tail->used, c->replstate);
@@ -1708,16 +1700,10 @@ int writeToClient(client *c, int handler_installed) {
                 //Decompress here and send it on the wire.
                 void *decompressed = zmalloc(o->decomp_size);
                 long int decompressed_len = 0;
-<<<<<<< HEAD
                 if ((decompressed_len = decompress_reply(o->buf, decompressed, o->used, o->decomp_size)) <= 0) {
                     /* Someone requested decompress, but we can't decompress.  Not good. */
                     serverLog(LL_WARNING,"[%p] id %ld Decompression failed: used %ld size %ld decompsize %ld decomplen %ld obuf_compression %d", o, c->id, o->used, o->size, o->decomp_size, decompressed_len, server.client_obuf_compression);
-=======
-                ;
-                if ((decompressed_len = decompress_reply(o->buf, decompressed, o->used, o->decomp_size)) <= 0) {
-                    /* Someone requested decompress, but we can't decompress.  Not good. */
-                    serverLog(LL_WARNING,"[%p] id %ld Decompression failed: used %ld size %ld decompsize %ld decomplen %ld", o, c->id, o->used, o->size, o->decomp_size, decompressed_len);
->>>>>>> 73e20a4c51b1aab328652bdaf93a0cf5b194706a
+
                     zfree(decompressed);
 
                     c->reply_bytes -= o->size;
@@ -1728,11 +1714,7 @@ int writeToClient(client *c, int handler_installed) {
                 objlen = decompressed_len; //update the objlen to the decompressed len.
 
                 nwritten = connWrite(c->conn, decompressed + c->sentlen, decompressed_len - c->sentlen);
-<<<<<<< HEAD
                 //serverLog(LL_WARNING, "[%p] id %ld write %ld dcomp %ld size %ld used %ld decompsize %ld sentlen %ld obuf_compression %d", o, c->id, nwritten, decompressed_len, o->size, objlen, o->decomp_size, c->sentlen, server.client_obuf_compression);
-=======
-                //serverLog(LL_WARNING, "[%p] id %ld write %ld dcomp %ld size %ld used %ld decompsize %ld sentlen %ld", o, c->id, nwritten, decompressed_len, o->size, objlen, o->decomp_size, c->sentlen);
->>>>>>> 73e20a4c51b1aab328652bdaf93a0cf5b194706a
                 zfree(decompressed);
             }
             else {
@@ -3342,7 +3324,6 @@ int getCompressionByType(char* compression) {
     else return -1;
 }
 
-<<<<<<< HEAD
 char *getCompressionTypeName(int compression_type) {
     switch(compression_type) {
     case CLIENT_OBUF_NO_COMPRESSION:  return "no";
@@ -3352,8 +3333,6 @@ char *getCompressionTypeName(int compression_type) {
     }
 }
 
-=======
->>>>>>> 73e20a4c51b1aab328652bdaf93a0cf5b194706a
 /* Rewrite a single item in the command vector.
  * The new val ref count is incremented, and the old decremented.
  *
