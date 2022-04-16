@@ -1013,6 +1013,16 @@ void configGetCommand(client *c) {
         sdsfree(buf);
         matches++;
     }
+    if (stringmatch(pattern,"replica-output-buffer-compression",1)) {
+        sds buf = sdsempty();
+
+        buf = sdscatprintf(buf,"%s", getCompressionTypeName(server.client_obuf_compression));
+
+        addReplyBulkCString(c,"replica-output-buffer-compression");
+        addReplyBulkCString(c,buf);
+        sdsfree(buf);
+        matches++;
+    }
     if (stringmatch(pattern,"unixsocketperm",1)) {
         char buf[32];
         snprintf(buf,sizeof(buf),"%lo",(unsigned long) server.unixsocketperm);

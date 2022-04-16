@@ -3,7 +3,7 @@
 docker_path="/home/eadinno/redis-docker/"
 
 function deploy_master_slave_containers() {
-    sudo docker rm -f redis_6380 redis_6379 redis_6381
+    sudo docker rm -f redis_6380 redis_6379 #redis_6381
     sudo docker build --file Dockerfile . --tag redis_compr
 
     sudo docker run --cap-add=ALL -d --network redis-bridge --name redis_6379 redis_compr redis-server \
@@ -28,7 +28,7 @@ function deploy_master_slave_containers() {
 
     # Setup the real-data container
     echo "Load Real Data to Redis"
-    run_real_data_redis
+    #run_real_data_redis
 }
 
 function run_real_data_redis()

@@ -15,6 +15,8 @@ tbf_rate_limit="500mbit"
 log_date=`date +%Y:%m:%d:%H:%M`
 log_file_name="log_$log_date.txt"
 
+declare -a compression_types=("lz4" "lzf" "no")
+
 logdata() {
     #Log data into a 'name:value' format
     local name=$1
@@ -25,7 +27,7 @@ logdata() {
 function start_profile_bpfcc()
 {
     local container_id=$1
-    sudo docker exec --privileged $container_id /bin/bash -c 'profile-bpfcc -F 999 -adf --pid $(pgrep -o redis-server) > out.profile-folded'
+    sudo docker exec --privileged $container_id /bin/bash -c 'profile-bpfcc -F 999 -adf --pid $(pgrep -o redis-server) > out.profile-folded' &
 }
 
 function export_profile_bpfcc()
@@ -34,18 +36,18 @@ function export_profile_bpfcc()
     local cmp_type=$2
     local data_type=$3
 
-    sudo docker exec $container_id /bin/bash -c 'kill -SIGTERM $(pidof profile-bpfcc)'
+    sudo docker exec $container_id /bin/bash -c 'kill -SIGTERM $(pgrep profile-bpfcc)'
     sudo docker exec $container_id /bin/bash -c 'while kill -0 $(pgrep profile-bpfcc) >/dev/null 2>&1; do sleep 1; done' #wait for proc to finish. can't do wait because perf started in another bash
 
     sudo docker cp $container_id:/out.profile-folded ~/${container_id}_profile.data
 
-    sudo ~/FlameGraph/flamegraph.pl --colors=java ${container_id}_out.profile-folded > ${container_id}_${cmp_type}_${data_type}_profile.svg
+    sudo ~/FlameGraph/flamegraph.pl --colors=java ~/${container_id}_profile.data > ${container_id}_${cmp_type}_${data_type}_profile.svg
 }
 
 function start_perf() {
     local container_id=$1
     echo "start perf $container_id"
-    sudo docker exec --privileged $container_id /bin/bash -c '/usr/bin/perf record -a -g --pid $(pgrep -o redis-server) -F 999 -- sleep 60 > /dev/null' &
+    sudo docker exec --privileged $container_id /bin/bash -c '/usr/bin/perf record -o perf.data -g --pid $(pgrep -w redis-server -d, ) -F 999 -- sleep 60 ' &
 }
 
 function export_perf() {
@@ -56,17 +58,18 @@ function export_perf() {
     sudo docker exec $container_id /bin/bash -c 'kill -SIGTERM $(pidof perf)'
     sudo docker exec $container_id /bin/bash -c 'while kill -0 $(pgrep perf) >/dev/null 2>&1; do sleep 1; done' #wait for proc to finish. can't do wait because perf started in another bash
 
-    sudo docker cp $container_id:/perf.data ~/${container_id}_perf.data
+    sudo docker exec $container_id /bin/bash -c 'perf script --input /perf.data > redis.perf.stacks'
+    sudo docker cp $container_id:/redis.perf.stacks ~/${container_id}_perf.stacks
 
-    sudo perf script --input ~/${container_id}_perf.data | ~/FlameGraph/stackcollapse-perf.pl > ${container_id}_out.perf-folded
+    ~/FlameGraph/stackcollapse-perf.pl ~/${container_id}_perf.stacks > ${container_id}_out.perf-folded
     sudo ~/FlameGraph/flamegraph.pl ${container_id}_out.perf-folded > ${container_id}_${cmp_type}_${data_type}_perf.svg
 }
-
-declare -a compression_types=("no" "lzf" "lz4")
 
 function set_redis_compression_type() {
     local compression_type=$1
     redis-cli -a redis -h $redis_bridge_device_ip -p 6379 CONFIG SET replica-output-buffer-compression $compression_type 2> /dev/null
+
+    redis-cli -a redis -h $redis_bridge_device_ip -p 6379 CONFIG GET replica-output-buffer-compression 2> /dev/null
 }
 
 function get_replica_offset() {
@@ -134,7 +137,7 @@ function add_rate_limits() {
 function redeploy_containers() {
     #echo "-redeploy containers"
     bash /home/eadinno/redis-docker/setup_containers.sh
-    sleep 10
+    #sleep 10
 }
 
 function cleanup_test() {
@@ -152,12 +155,14 @@ function test1_random_data() {
     wait_master_replica_online_sync
     restart_container
     add_rate_limits $tbf_rate_limit
-    start_perf "redis_6380"
+    #start_perf "redis_6380"
     start_perf "redis_6379"
+    #start_profile_bpfcc "redis_6379"
     add_output_buffer_random_data
     wait_replica_bgsave
     export_perf "redis_6379" $cmp_type "random"
-    export_perf "redis_6380" $cmp_type "random"
+    #export_profile_bpfcc "redis_6379" $cmp_type "random"
+    #export_perf "redis_6380" $cmp_type "random"
     cleanup_test
 }
 
@@ -171,11 +176,13 @@ function test2_compressable_data() {
     restart_container
     add_rate_limits $tbf_rate_limit
     start_perf "redis_6379"
-    start_perf "redis_6380"
+    #start_profile_bpfcc "redis_6379"
+    #start_perf "redis_6380"
     add_output_buffer_compressable_data
     wait_replica_bgsave
     export_perf "redis_6379" $cmp_type "compressable"
-    export_perf "redis_6380" $cmp_type "compressable"
+    #export_profile_bpfcc "redis_6379" $cmp_type "compressable"
+    #export_perf "redis_6380" $cmp_type "compressable"
     cleanup_test
 }
 
@@ -193,11 +200,13 @@ function test3_real_data() {
     add_rate_limits $tbf_rate_limit
     sleep 15 # sleep 15 sec. This how much it takes for the SCAN and GET to complete
     start_perf "redis_6379"
-    start_perf "redis_6380"
+    #start_profile_bpfcc "redis_6379"
+    #start_perf "redis_6380"
     kill -10 $(pidof redis-benchmark) #SIGUSR1 to start setting data
     wait_replica_bgsave
     export_perf "redis_6379" $cmp_type $real_data_test
-    export_perf "redis_6380" $cmp_type $real_data_test
+    #export_profile_bpfcc "redis_6379" $cmp_type $real_data_test
+    #export_perf "redis_6380" $cmp_type $real_data_test
     cleanup_test
 }
 
@@ -229,6 +238,10 @@ main () {
     redeploy_containers
     wait_master_replica_online_sync
 
+    #set_redis_compression_type "lz4"
+    #test1_random_data "lz4"
+    #sleep 100000
+    #exit
     for i in "${compression_types[@]}"
     do
         #echo -e "-start testing $i compression"
