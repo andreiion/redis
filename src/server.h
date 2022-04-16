@@ -1881,7 +1881,10 @@ unsigned long getClientOutputBufferMemoryUsage(client *c);
 int freeClientsInAsyncFreeQueue(void);
 int closeClientOnOutputBufferLimitReached(client *c, int async);
 int getCompressionByType(char* compression);
+<<<<<<< HEAD
 char *getCompressionTypeName(int compression_type);
+=======
+>>>>>>> 73e20a4c51b1aab328652bdaf93a0cf5b194706a
 int getClientType(client *c);
 int getClientTypeByName(char *name);
 char *getClientTypeName(int class);
