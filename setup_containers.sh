@@ -1,13 +1,20 @@
 #!/bin/bash
 
+docker_path="/home/eadinno/redis-docker/"
+
 function deploy_master_slave_containers() {
     sudo docker rm -f redis_6380 redis_6379 redis_6381
     sudo docker build --file Dockerfile . --tag redis_compr
 
-    sudo docker run --cap-add=NET_ADMIN -d --network redis-bridge --name redis_6379 redis_compr redis-server \
+    sudo docker run --cap-add=ALL -d --network redis-bridge --name redis_6379 redis_compr redis-server \
                     /etc/redis/redis_server_6379.conf --loglevel debug
-    sudo docker run --cap-add=NET_ADMIN -d --network redis-bridge --name redis_6380 redis_compr redis-server \
+    sudo docker run --cap-add=ALL -d --network redis-bridge --name redis_6380 redis_compr redis-server \
                     /etc/redis/redis_server_6380.conf --loglevel debug
+
+    #sudo docker run --cap-add=NET_ADMIN -d --network redis-bridge --name redis_6379 redis_compr redis-server \
+    #                /etc/redis/redis_server_6379.conf --loglevel debug
+    #sudo docker run --cap-add=NET_ADMIN -d --network redis-bridge --name redis_6380 redis_compr redis-server \
+    #                /etc/redis/redis_server_6380.conf --loglevel debug
 
     #Connect another bridge to the interface so that we can call redis-benchmark and redis-cli outside the containers without speed limitations
     sudo docker network connect bridge redis_6379
@@ -26,7 +33,7 @@ function deploy_master_slave_containers() {
 
 function run_real_data_redis()
 {
-    sudo docker run --cap-add=NET_ADMIN -d --network redis-bridge --name redis_6381 redis_compr redis-server \
+    sudo docker run --cap-add=ALL -d --network redis-bridge --name redis_6381 redis_compr redis-server \
                     /etc/redis/redis_server_6381.conf --loglevel debug
 
     sudo docker network connect bridge redis_6381
@@ -45,7 +52,7 @@ function load_real_data_redis() {
 
 main () {
 
-    deploy_master_slave_containers
+    cd $docker_path && deploy_master_slave_containers
 }
 
 main
