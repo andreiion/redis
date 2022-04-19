@@ -18,11 +18,26 @@ log_file_name="log_$log_date.txt"
 
 declare -a compression_types=("lz4" "lzf" "no")
 
+#"mset" "sadd"
+declare -a command_types=("set" "mset" "hset")
+
 logdata() {
     #Log data into a 'name:value' format
     local name=$1
     local value=$2
     printf '%s:%s\n' $1 $2 >> $log_file_name
+}
+
+function start_sar() {
+    # run sar in background
+    sudo sar -o sar.out -A -u 1 > /dev/null 2>&1 &
+
+    sudo sar -A -f sar.out > sar_$(hostname).txt
+
+}
+
+function export_sar() {
+    echo "da"
 }
 
 function start_profile_bpfcc()
@@ -93,14 +108,25 @@ function get_max_mem_used() {
 }
 
 function add_output_buffer_random_data() {
-    #echo "-add random data"
-    #redis-benchmark -h -h 172.17.0.2 -p 6379 -t set -c 50 -n 160000 -d 10000 -q -a redis -r 1000000000 --random-data 1
-    redis-benchmark -h $docker_bridge_device_ip -t $tests -c $clients_num -n $requests_num -d $data_size -q -a redis -r 1000000000 --random-data 1 &
+    local test_type=$1
+
+    if [ "$test_type" == "mset" ]; then
+        redis-benchmark -h $docker_bridge_device_ip -t $test_type -c $clients_num -n $(expr $requests_num / "10") -d $data_size -q -a redis -r 1000000000 --random-data 1 --diff-value-random 1 &
+    else
+        #redis-benchmark -h 172.17.0.2 -p 6379 -t set -c 50 -n 160000 -d 10000 -q -a redis -r 1000000000 --random-data 1 --diff_value_random 1
+        redis-benchmark -h $docker_bridge_device_ip -t $test_type -c $clients_num -n $requests_num -d $data_size -q -a redis -r 1000000000 --random-data 1 --diff-value-random 1 &
+    fi
 }
 
 function add_output_buffer_compressable_data() {
+    local test_type=$1
     #echo "-add compressable data"
-    redis-benchmark -h $docker_bridge_device_ip -t $tests -c $clients_num -n $requests_num -d $data_size -q -a redis -r 1000000000 --random-data 0 &
+    if [ "$test_type" == "mset" ]; then
+        redis-benchmark -h $docker_bridge_device_ip -t $test_type -c $clients_num -n $(expr $requests_num / "10") -d $data_size -q -a redis -r 1000000000 --random-data 0 &
+    else
+        #redis-benchmark -h 172.17.0.2 -p 6379 -t set -c 50 -n 160000 -d 10000 -q -a redis -r 1000000000 --random-data 1
+        redis-benchmark -h $docker_bridge_device_ip -t $test_type -c $clients_num -n $requests_num -d $data_size -q -a redis -r 1000000000 --random-data 0 &
+    fi
 }
 
 add_output_buffer_real_data() {
@@ -148,6 +174,7 @@ function cleanup_test() {
 
 function test1_random_data() {
     local cmp_type=$1
+    local command_type=$2
     echo -e "Test 1. Populate buffer with random data while bulk sync"
     logdata "data-type" "random"
     flush_db
@@ -158,7 +185,8 @@ function test1_random_data() {
     #start_perf "redis_6380"
     start_perf "redis_6379"
     #start_profile_bpfcc "redis_6379"
-    add_output_buffer_random_data
+    logdata "command-type" $command_type
+    add_output_buffer_random_data $command_type
     wait_replica_bgsave
     export_perf "redis_6379" $cmp_type "random"
     #export_profile_bpfcc "redis_6379" $cmp_type "random"
@@ -168,6 +196,7 @@ function test1_random_data() {
 
 function test2_compressable_data() {
     local cmp_type=$1
+    local command_type=$2
     echo -e "Test 2. Populate buffer with super compressable data while bulk sync"
     logdata "data-type" "compressable"
     flush_db
@@ -178,7 +207,8 @@ function test2_compressable_data() {
     start_perf "redis_6379"
     #start_profile_bpfcc "redis_6379"
     #start_perf "redis_6380"
-    add_output_buffer_compressable_data
+    logdata "command_type" $command_type
+    add_output_buffer_compressable_data $command_type
     wait_replica_bgsave
     export_perf "redis_6379" $cmp_type "compressable"
     #export_profile_bpfcc "redis_6379" $cmp_type "compressable"
@@ -244,10 +274,15 @@ main () {
         logdata "compression-type" $i
         set_redis_compression_type $i
 
-        test1_random_data "$i"
-        test2_compressable_data "$i"
         test3_real_data "$i" "real_data_string_mset" "500mbit"
         test3_real_data "$i" "real_data_string_set" "250mbit" #set is slow, reduce rate limit.
+        # execute different command types for the random and compressable data
+        for j in "${command_types[@]}"
+        do
+            test1_random_data "$i" "$j"
+            test2_compressable_data "$i" "$j"
+        done
+
 
         printf "\n" >> $log_file_name
     done

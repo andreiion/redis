@@ -95,6 +95,7 @@ static struct config {
     long long previous_tick;
     int keysize;
     int datasize;
+    char *data;     //have a pointer to data so that we do not call malloc too many times
     int randomdata; //enable disable random data. if random data is disabled it will generate only 'aaaaaaaaaa' string of datasize len
     int randomkeys;
     int randomkeys_keyspacelen;
@@ -105,6 +106,7 @@ static struct config {
     const char *title;
     list *clients;
     int real_data_test;            /* flag to check that we are doing real_data_tests */
+    int diff_value_random;         /* flag to check we should generate different random data for each key */
     redisReply **val_reply;        /* pointer to a list of replies used only by one client */
     int val_reply_count;           /* counter to keep track of how many value replies are */
     int val_reply_total;           /* total number of  to keep track of how many value replies are */
@@ -660,6 +662,23 @@ char* create_command(const char* command_type, int *len, int requests_issued)
     }
 }
 
+/* Generate random data for redis benchmark. See #7196. */
+static inline void genBenchmarkRandomData(char *data, int count) {
+    static uint32_t state = 1234;
+    int i = 0;
+
+    while (count--) {
+        if (!config.randomdata) {
+            data[i++] = 'a';
+        } else {
+            //state = (state*1103515245+12345);
+            //state = (state * time(NULL) + 12345);
+            state = (state * (rand() % 900000000  + 1103515245) + 12345);
+            data[i++] = '0'+((state>>16)&63);
+        }
+    }
+}
+
 static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     client c = privdata;
     UNUSED(el);
@@ -674,17 +693,42 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         if (requests_issued >= config.requests) {
             return;
         }
+        int len = 0;
+        char* cmd;
         if (config.real_data_test) {
-            int len = 0;
-            char* cmd = create_command(c->cmd_type, &len, requests_issued);
+            cmd = create_command(c->cmd_type, &len, requests_issued);
 
             c->obuf = sdsempty();
             c->obuf = sdscatlen(c->obuf,cmd,len);
             free(cmd);
+        }
+        if (config.diff_value_random && test_is_selected("set")) {
 
-        /*for (int i = 0; i < 20; ++i) {
-            freeReplyObject(config.key_reply->element[j + i]);
-        }*/
+            genBenchmarkRandomData(config.data, config.datasize);
+            config.data[config.datasize] = '\0';
+            len = redisFormatCommand(&cmd,"SET key:__rand_int__ %s",config.data);
+
+            c->obuf = sdsempty();
+            c->obuf = sdscatlen(c->obuf,cmd,len);
+
+            if (config.randomkeys) {
+                char *p = c->obuf;
+
+                c->randlen = 0;
+                c->randfree = RANDPTR_INITIAL_SIZE;
+                c->randptr = zmalloc(sizeof(char*)*c->randfree);
+                while ((p = strstr(p,"__rand_int__")) != NULL) {
+                    if (c->randfree == 0) {
+                        c->randptr = zrealloc(c->randptr,sizeof(char*)*c->randlen*2);
+                        c->randfree += c->randlen;
+                    }
+                    c->randptr[c->randlen++] = p;
+                    c->randfree--;
+                    p += 12; /* 12 is strlen("__rand_int__). */
+                }
+            }
+
+            free(cmd);
         }
 
         //freeReplyObject(config.val_reply[requests_issued]);
@@ -773,7 +817,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
             port = node->port;
             c->cluster_node = node;
         }
-        if (config.real_data_test) {
+        if (config.real_data_test || config.diff_value_random) {
             //c->context = redisConnectNonBlock("172.17.0.3", 6381);
             //c->context =  getRedisContext("172.17.0.3", 6381, config.hostsocket);
             //c->context = redisConnectNonBlock(ip,port);
@@ -812,7 +856,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
      * These commands are discarded after the first response, so if the client is
      * reused the commands will not be used again. */
     c->prefix_pending = 0;
-    if (!config.real_data_test && config.auth) {
+    if (!(config.diff_value_random || config.real_data_test) && config.auth) {
         char *buf = NULL;
         int len;
         if (config.user == NULL)
@@ -1477,21 +1521,6 @@ static void updateClusterSlotsConfiguration() {
     pthread_mutex_unlock(&config.is_updating_slots_mutex);
 }
 
-/* Generate random data for redis benchmark. See #7196. */
-static void genBenchmarkRandomData(char *data, int count) {
-    static uint32_t state = 1234;
-    int i = 0;
-
-    while (count--) {
-        if (!config.randomdata) {
-            data[i++] = 'a';
-        } else {
-            state = (state*1103515245+12345);
-            data[i++] = '0'+((state>>16)&63);
-        }
-    }
-}
-
 /* Returns number of consumed options. */
 int parseOptions(int argc, const char **argv) {
     int i;
@@ -1538,6 +1567,9 @@ int parseOptions(int argc, const char **argv) {
         } else if (!strcmp(argv[i], "--random-data")) {
             if (lastarg) goto invalid;
             config.randomdata = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--diff-value-random")) {
+            if (lastarg) goto invalid;
+            config.diff_value_random = atoi(argv[++i]);
         } else if (!strcmp(argv[i],"-P")) {
             if (lastarg) goto invalid;
             config.pipeline = atoi(argv[++i]);
@@ -2209,6 +2241,7 @@ int main(int argc, const char **argv) {
     config.slots_last_update = 0;
     config.enable_tracking = 0;
     config.real_data_test = 0;
+    config.diff_value_random = 0;
 
     i = parseOptions(argc,argv);
     argc -= i;
@@ -2331,6 +2364,7 @@ int main(int argc, const char **argv) {
     do {
         genBenchmarkRandomData(data, config.datasize);
         data[config.datasize] = '\0';
+        config.data = data;
 
         if (test_is_selected("ping_inline") || test_is_selected("ping"))
             benchmark("PING_INLINE","PING\r\n",6);
