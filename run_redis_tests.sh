@@ -7,7 +7,6 @@ docker_bridge_device_ip="172.17.0.2"
 
 requests_num="160000"
 data_size="10000"
-tests="set"
 
 tbf_rate_limit="500mbit"
 
@@ -15,8 +14,9 @@ tbf_rate_limit="500mbit"
 log_date=`date +%Y:%m:%d:%H:%M`
 log_file_name="log_$log_date.txt"
 
+redis_benchmark_file="redis-benchmark.out"
 
-declare -a compression_types=("lz4" "lzf" "no")
+declare -a compression_types=("no" "lzf" "lz4")
 
 #"mset" "sadd"
 declare -a command_types=("set" "mset" "hset")
@@ -111,10 +111,18 @@ function add_output_buffer_random_data() {
     local test_type=$1
 
     if [ "$test_type" == "mset" ]; then
-        redis-benchmark -h $docker_bridge_device_ip -t $test_type -c $clients_num -n $(expr $requests_num / "10") -d $data_size -q -a redis -r 1000000000 --random-data 1 --diff-value-random 1 &
+        redis-benchmark -h $docker_bridge_device_ip \
+                        -t $test_type -c $clients_num \
+                        -n $(expr $requests_num / "10") \
+                        -d $data_size -a redis -r 1000000000 \
+                        --random-data 1 --diff-value-random 1 &
     else
-        #redis-benchmark -h 172.17.0.2 -p 6379 -t set -c 50 -n 160000 -d 10000 -q -a redis -r 1000000000 --random-data 1 --diff_value_random 1
-        redis-benchmark -h $docker_bridge_device_ip -t $test_type -c $clients_num -n $requests_num -d $data_size -q -a redis -r 1000000000 --random-data 1 --diff-value-random 1 &
+        #redis-benchmark -h 172.17.0.2 -p 6379 -t set -c 8 -n 1600000 -d 1000 -q -a redis -r 1000000000 --random-data 1 --diff-value-random 1
+        redis-benchmark -h $docker_bridge_device_ip \
+                        -t $test_type -c $clients_num \
+                        -n $requests_num \
+                        -d $data_size -a redis -r 1000000000 \
+                        --random-data 1 --diff-value-random 1 &
     fi
 }
 
@@ -122,10 +130,16 @@ function add_output_buffer_compressable_data() {
     local test_type=$1
     #echo "-add compressable data"
     if [ "$test_type" == "mset" ]; then
-        redis-benchmark -h $docker_bridge_device_ip -t $test_type -c $clients_num -n $(expr $requests_num / "10") -d $data_size -q -a redis -r 1000000000 --random-data 0 &
+        redis-benchmark -h $docker_bridge_device_ip \
+                        -t $test_type -c $clients_num \
+                        -n $(expr $requests_num / "10") \
+                        -d $data_size -q -a redis -r 1000000000 --random-data 0 &
     else
         #redis-benchmark -h 172.17.0.2 -p 6379 -t set -c 50 -n 160000 -d 10000 -q -a redis -r 1000000000 --random-data 1
-        redis-benchmark -h $docker_bridge_device_ip -t $test_type -c $clients_num -n $requests_num -d $data_size -q -a redis -r 1000000000 --random-data 0 &
+        redis-benchmark -h $docker_bridge_device_ip \
+                        -t $test_type -c $clients_num \
+                        -n $requests_num \
+                        -d $data_size -q -a redis -r 1000000000 --random-data 0 &
     fi
 }
 
@@ -144,7 +158,11 @@ function flush_db() {
 function populate_big_data() {
     #echo "-populate DB with a lot of ramdom data"
     #redis-benchmark -h $docker_bridge_device_ip -t set,lpush -c $clients_num -n $requests_num -d $data_size -q -a redis --random-data 1
-    redis-benchmark -h $docker_bridge_device_ip -t set -c $clients_num -n $requests_num -d $data_size -q -a redis -r 1000000000 --random-data 1
+    redis-benchmark -h $docker_bridge_device_ip \
+                    -t set -c $clients_num \
+                    -n $requests_num \
+                    -d $data_size \
+                    -q -a redis -r 1000000000 --random-data 1
 }
 
 function restart_container() {
@@ -207,7 +225,7 @@ function test2_compressable_data() {
     start_perf "redis_6379"
     #start_profile_bpfcc "redis_6379"
     #start_perf "redis_6380"
-    logdata "command_type" $command_type
+    logdata "command-type" $command_type
     add_output_buffer_compressable_data $command_type
     wait_replica_bgsave
     export_perf "redis_6379" $cmp_type "compressable"
@@ -261,28 +279,30 @@ function wait_replica_bgsave() {
 }
 
 main () {
-    #test1_random_data
-    #test2_compressable_data
-    #test3_real_data
-    #exit
     redeploy_containers
     wait_master_replica_online_sync
 
+    #test1_random_data "no" "set"
+    #exit
     for i in "${compression_types[@]}"
     do
         #echo -e "-start testing $i compression"
         logdata "compression-type" $i
         set_redis_compression_type $i
 
-        test3_real_data "$i" "real_data_string_mset" "500mbit"
-        test3_real_data "$i" "real_data_string_set" "250mbit" #set is slow, reduce rate limit.
+
         # execute different command types for the random and compressable data
         for j in "${command_types[@]}"
         do
             test1_random_data "$i" "$j"
+        done
+        for j in "${command_types[@]}"
+        do
             test2_compressable_data "$i" "$j"
         done
 
+        test3_real_data "$i" "real_data_string_mset" "500mbit"
+        test3_real_data "$i" "real_data_string_set" "250mbit" #set is slow, reduce rate limit.
 
         printf "\n" >> $log_file_name
     done

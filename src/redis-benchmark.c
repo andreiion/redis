@@ -670,11 +670,33 @@ static inline void genBenchmarkRandomData(char *data, int count) {
     while (count--) {
         if (!config.randomdata) {
             data[i++] = 'a';
-        } else {
+        } else if (config.diff_value_random) {
             //state = (state*1103515245+12345);
             //state = (state * time(NULL) + 12345);
             state = (state * (rand() % 900000000  + 1103515245) + 12345);
             data[i++] = '0'+((state>>16)&63);
+        } else {
+            state = (state*1103515245+12345);
+            data[i++] = '0'+((state>>16)&63);
+        }
+    }
+}
+
+void put_random_keys(client c) {
+    if (config.randomkeys) {
+        char *p = c->obuf;
+
+        c->randlen = 0;
+        c->randfree = RANDPTR_INITIAL_SIZE;
+        c->randptr = zmalloc(sizeof(char *) * c->randfree);
+        while ((p = strstr(p, "__rand_int__")) != NULL) {
+          if (c->randfree == 0) {
+            c->randptr = zrealloc(c->randptr, sizeof(char *) * c->randlen * 2);
+            c->randfree += c->randlen;
+          }
+          c->randptr[c->randlen++] = p;
+          c->randfree--;
+          p += 12; /* 12 is strlen("__rand_int__). */
         }
     }
 }
@@ -703,30 +725,45 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             free(cmd);
         }
         if (config.diff_value_random && test_is_selected("set")) {
-
             genBenchmarkRandomData(config.data, config.datasize);
             config.data[config.datasize] = '\0';
             len = redisFormatCommand(&cmd,"SET key:__rand_int__ %s",config.data);
 
             c->obuf = sdsempty();
             c->obuf = sdscatlen(c->obuf,cmd,len);
+            put_random_keys(c);
+            free(cmd);
+        }
 
-            if (config.randomkeys) {
-                char *p = c->obuf;
+        if (config.diff_value_random && test_is_selected("mset")) {
+            const char *cmd_argv[21];
+            cmd_argv[0] = "MSET";
+            sds key_placeholder = sdscatprintf(sdsnew(""),"key:__rand_int__");
+            for (int i = 1; i < 21; i += 2) {
+                genBenchmarkRandomData(config.data, config.datasize);
+                config.data[config.datasize] = '\0';
 
-                c->randlen = 0;
-                c->randfree = RANDPTR_INITIAL_SIZE;
-                c->randptr = zmalloc(sizeof(char*)*c->randfree);
-                while ((p = strstr(p,"__rand_int__")) != NULL) {
-                    if (c->randfree == 0) {
-                        c->randptr = zrealloc(c->randptr,sizeof(char*)*c->randlen*2);
-                        c->randfree += c->randlen;
-                    }
-                    c->randptr[c->randlen++] = p;
-                    c->randfree--;
-                    p += 12; /* 12 is strlen("__rand_int__). */
-                }
+                cmd_argv[i] = key_placeholder;
+                cmd_argv[i+1] = config.data;
             }
+            len = redisFormatCommandArgv(&cmd,21,cmd_argv,NULL);
+
+            c->obuf = sdsempty();
+            c->obuf = sdscatlen(c->obuf,cmd,len);
+            put_random_keys(c);
+
+            free(cmd);
+            sdsfree(key_placeholder);
+        }
+
+        if (config.diff_value_random && test_is_selected("hset")) {
+            genBenchmarkRandomData(config.data, config.datasize);
+            config.data[config.datasize] = '\0';
+            len = redisFormatCommand(&cmd, "HSET myhash element:__rand_int__ %s", config.data);
+
+            c->obuf = sdsempty();
+            c->obuf = sdscatlen(c->obuf,cmd,len);
+            put_random_keys(c);
 
             free(cmd);
         }
