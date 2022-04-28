@@ -1,0 +1,403 @@
+{
+"test": [
+{
+"compression-type": "no",
+    "items": [
+    {
+    "data-type": "random",
+        "rate-limit": "500mbit",
+        "command-type": "set",
+        "bulk-sync-duration": "16",
+        "used-mem": "1611757928",
+        "latency-report": {
+            "rps": "33133.15",
+            "avg": "0.088",
+            "min": "0.032",
+            "p50": "0.087",
+            "p95": "0.151",
+            "p99": "0.247",
+            "max": "5.999"
+        }
+    },
+    {
+    "data-type": "random",
+        "rate-limit": "500mbit",
+        "command-type": "mset",
+        "bulk-sync-duration": "17",
+        "used-mem": "1609912568",
+        "latency-report": {
+            "rps": "4494.38",
+            "avg": "0.852",
+            "min": "0.320",
+            "p50": "0.799",
+            "p95": "1.279",
+            "p99": "1.487",
+            "max": "3.391"
+        }
+    },
+    {
+    "data-type": "random",
+        "rate-limit": "500mbit",
+        "command-type": "hset",
+        "bulk-sync-duration": "17",
+        "used-mem": "1614484960",
+        "latency-report": {
+            "rps": "32639.74",
+            "avg": "0.092",
+            "min": "0.032",
+            "p50": "0.087",
+            "p95": "0.159",
+            "p99": "0.255",
+            "max": "5.199"
+        }
+    },
+    {
+    "data-type": "compressable",
+        "rate-limit": "500mbit",
+        "command-type": "set",
+        "bulk-sync-duration": "28",
+        "used-mem": "1611757928",
+        "latency-report": {
+            "rps": "29940.12",
+            "avg": "0.122",
+            "min": "0.032",
+            "p50": "0.111",
+            "p95": "0.207",
+            "p99": "0.303",
+            "max": "5.247"
+        }
+    },
+    {
+    "data-type": "compressable",
+        "rate-limit": "500mbit",
+        "command-type": "mset",
+        "bulk-sync-duration": "27",
+        "used-mem": "1609912568",
+        "latency-report": {
+            "rps": "4142.93",
+            "avg": "0.956",
+            "min": "0.376",
+            "p50": "0.855",
+            "p95": "1.423",
+            "p99": "1.919",
+            "max": "4.415"
+        }
+    },
+    {
+    "data-type": "compressable",
+        "rate-limit": "500mbit",
+        "command-type": "hset",
+        "bulk-sync-duration": "27",
+        "used-mem": "1614484960",
+        "latency-report": {
+            "rps": "29154.52",
+            "avg": "0.125",
+            "min": "0.040",
+            "p50": "0.119",
+            "p95": "0.215",
+            "p99": "0.295",
+            "max": "3.511"
+        }
+    },
+    {
+    "data-type": "real",
+        "rate-limit": "500mbit",
+        "command-type": "real_data_string_mset",
+        "bulk-sync-duration": "12",
+        "used-mem": "1674035664",
+        "latency-report": {
+            "rps": "11430.88",
+            "avg": "3.877",
+            "min": "0.584",
+            "p50": "3.239",
+            "p95": "7.791",
+            "p99": "13.207",
+            "max": "32.159"
+        }
+    },
+    {
+    "data-type": "real",
+        "rate-limit": "250mbit",
+        "command-type": "real_data_string_set",
+        "bulk-sync-duration": "40",
+        "used-mem": "1699276472",
+        "latency-report": {
+            "rps": "69253.48",
+            "avg": "0.470",
+            "min": "0.088",
+            "p50": "0.407",
+            "p95": "0.847",
+            "p99": "1.127",
+            "max": "15.063"
+        }
+    }
+]
+},
+{
+"compression-type": "lzf",
+    "items": [
+    {
+    "data-type": "random",
+        "rate-limit": "500mbit",
+        "command-type": "set",
+        "bulk-sync-duration": "18",
+        "used-mem": "1151627664",
+        "latency-report": {
+            "rps": "8840.76",
+            "avg": "0.420",
+            "min": "0.032",
+            "p50": "0.511",
+            "p95": "0.711",
+            "p99": "0.799",
+            "max": "11.887"
+        }
+    },
+    {
+    "data-type": "random",
+        "rate-limit": "500mbit",
+        "command-type": "mset",
+        "bulk-sync-duration": "17",
+        "used-mem": "1247278824",
+        "latency-report": {
+            "rps": "906.16",
+            "avg": "4.368",
+            "min": "0.328",
+            "p50": "5.143",
+            "p95": "5.911",
+            "p99": "6.519",
+            "max": "20.271"
+        }
+    },
+    {
+    "data-type": "random",
+        "rate-limit": "500mbit",
+        "command-type": "hset",
+        "bulk-sync-duration": "17",
+        "used-mem": "1091284392",
+        "latency-report": {
+            "rps": "9205.98",
+            "avg": "0.402",
+            "min": "0.032",
+            "p50": "0.511",
+            "p95": "0.711",
+            "p99": "0.791",
+            "max": "10.631"
+        }
+    },
+    {
+    "data-type": "compressable",
+        "rate-limit": "500mbit",
+        "command-type": "set",
+        "bulk-sync-duration": "27",
+        "used-mem": "32273576",
+        "latency-report": {
+            "rps": "22231.48",
+            "avg": "0.168",
+            "min": "0.032",
+            "p50": "0.159",
+            "p95": "0.279",
+            "p99": "0.375",
+            "max": "14.431"
+        }
+    },
+    {
+    "data-type": "compressable",
+        "rate-limit": "500mbit",
+        "command-type": "mset",
+        "bulk-sync-duration": "26",
+        "used-mem": "32101880",
+        "latency-report": {
+            "rps": "3055.18",
+            "avg": "1.296",
+            "min": "0.480",
+            "p50": "1.231",
+            "p95": "1.703",
+            "p99": "1.895",
+            "max": "10.479"
+        }
+    },
+    {
+    "data-type": "compressable",
+        "rate-limit": "500mbit",
+        "command-type": "hset",
+        "bulk-sync-duration": "26",
+        "used-mem": "37323936",
+        "latency-report": {
+            "rps": "22932.49",
+            "avg": "0.162",
+            "min": "0.032",
+            "p50": "0.151",
+            "p95": "0.255",
+            "p99": "0.351",
+            "max": "5.071"
+        }
+    },
+    {
+    "data-type": "real",
+        "rate-limit": "500mbit",
+        "command-type": "real_data_string_mset",
+        "bulk-sync-duration": "13",
+        "used-mem": "525419728",
+        "latency-report": {
+            "rps": "6898.76",
+            "avg": "6.796",
+            "min": "0.904",
+            "p50": "6.431",
+            "p95": "13.535",
+            "p99": "17.119",
+            "max": "29.823"
+        }
+    },
+    {
+    "data-type": "real",
+        "rate-limit": "250mbit",
+        "command-type": "real_data_string_set",
+        "bulk-sync-duration": "38",
+        "used-mem": "793254992",
+        "latency-report": {
+            "rps": "55375.16",
+            "avg": "0.785",
+            "min": "0.160",
+            "p50": "0.751",
+            "p95": "1.231",
+            "p99": "1.559",
+            "max": "17.951"
+        }
+    }
+]
+},
+{
+"compression-type": "lz4",
+    "items": [
+    {
+    "data-type": "random",
+        "rate-limit": "500mbit",
+        "command-type": "set",
+        "bulk-sync-duration": "17",
+        "used-mem": "1611778432",
+        "latency-report": {
+            "rps": "29022.31",
+            "avg": "0.109",
+            "min": "0.032",
+            "p50": "0.103",
+            "p95": "0.191",
+            "p99": "0.287",
+            "max": "2.959"
+        }
+    },
+    {
+    "data-type": "random",
+        "rate-limit": "500mbit",
+        "command-type": "mset",
+        "bulk-sync-duration": "17",
+        "used-mem": "1609912568",
+        "latency-report": {
+            "rps": "3842.46",
+            "avg": "1.002",
+            "min": "0.344",
+            "p50": "0.951",
+            "p95": "1.447",
+            "p99": "1.655",
+            "max": "9.399"
+        }
+    },
+    {
+    "data-type": "random",
+        "rate-limit": "500mbit",
+        "command-type": "hset",
+        "bulk-sync-duration": "17",
+        "used-mem": "1614484960",
+        "latency-report": {
+            "rps": "29266.51",
+            "avg": "0.107",
+            "min": "0.040",
+            "p50": "0.103",
+            "p95": "0.183",
+            "p99": "0.287",
+            "max": "3.407"
+        }
+    },
+    {
+    "data-type": "compressable",
+        "rate-limit": "500mbit",
+        "command-type": "set",
+        "bulk-sync-duration": "28",
+        "used-mem": "17590376",
+        "latency-report": {
+            "rps": "35188.04",
+            "avg": "0.102",
+            "min": "0.024",
+            "p50": "0.095",
+            "p95": "0.175",
+            "p99": "0.263",
+            "max": "15.007"
+        }
+    },
+    {
+    "data-type": "compressable",
+        "rate-limit": "500mbit",
+        "command-type": "mset",
+        "bulk-sync-duration": "28",
+        "used-mem": "17548376",
+        "latency-report": {
+            "rps": "5515.34",
+            "avg": "0.718",
+            "min": "0.344",
+            "p50": "0.615",
+            "p95": "1.103",
+            "p99": "1.511",
+            "max": "16.815"
+        }
+    },
+    {
+    "data-type": "compressable",
+        "rate-limit": "500mbit",
+        "command-type": "hset",
+        "bulk-sync-duration": "26",
+        "used-mem": "19548480",
+        "latency-report": {
+            "rps": "38610.04",
+            "avg": "0.092",
+            "min": "0.024",
+            "p50": "0.087",
+            "p95": "0.151",
+            "p99": "0.231",
+            "max": "9.743"
+        }
+    },
+    {
+    "data-type": "real",
+        "rate-limit": "500mbit",
+        "command-type": "real_data_string_mset",
+        "bulk-sync-duration": "12",
+        "used-mem": "620154960",
+        "latency-report": {
+            "rps": "7874.18",
+            "avg": "5.903",
+            "min": "1.088",
+            "p50": "5.103",
+            "p95": "11.071",
+            "p99": "16.479",
+            "max": "40.191"
+        }
+    },
+    {
+    "data-type": "real",
+        "rate-limit": "250mbit",
+        "command-type": "real_data_string_set",
+        "bulk-sync-duration": "38",
+        "used-mem": "777418496",
+        "latency-report": {
+            "rps": "64458.95",
+            "avg": "0.633",
+            "min": "0.152",
+            "p50": "0.599",
+            "p95": "1.023",
+            "p99": "1.303",
+            "max": "8.175"
+        }
+    }
+]
+}
+]
+}
