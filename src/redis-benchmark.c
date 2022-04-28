@@ -95,7 +95,7 @@ static struct config {
     long long previous_tick;
     int keysize;
     int datasize;
-    char *data;     //have a pointer to data so that we do not call malloc too many times
+    char **data;     //have a pointer to data array so that we do not call malloc too many times
     int randomdata; //enable disable random data. if random data is disabled it will generate only 'aaaaaaaaaa' string of datasize len
     int randomkeys;
     int randomkeys_keyspacelen;
@@ -673,7 +673,7 @@ static inline void genBenchmarkRandomData(char *data, int count) {
         } else if (config.diff_value_random) {
             //state = (state*1103515245+12345);
             //state = (state * time(NULL) + 12345);
-            state = (state * (rand() % 900000000  + 1103515245) + 12345);
+            state = (state * (random() % 100000000 + 1103515245) + 12345);
             data[i++] = '0'+((state>>16)&63);
         } else {
             state = (state*1103515245+12345);
@@ -725,9 +725,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             free(cmd);
         }
         if (config.diff_value_random && test_is_selected("set")) {
-            genBenchmarkRandomData(config.data, config.datasize);
-            config.data[config.datasize] = '\0';
-            len = redisFormatCommand(&cmd,"SET key:__rand_int__ %s",config.data);
+            len = redisFormatCommand(&cmd,"SET key:__rand_int__ %s",config.data[requests_issued]);
 
             c->obuf = sdsempty();
             c->obuf = sdscatlen(c->obuf,cmd,len);
@@ -740,11 +738,11 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             cmd_argv[0] = "MSET";
             sds key_placeholder = sdscatprintf(sdsnew(""),"key:__rand_int__");
             for (int i = 1; i < 21; i += 2) {
-                genBenchmarkRandomData(config.data, config.datasize);
-                config.data[config.datasize] = '\0';
 
                 cmd_argv[i] = key_placeholder;
-                cmd_argv[i+1] = config.data;
+                cmd_argv[i+1] = config.data[10 * requests_issued + i / 2]; //todo: div might be too slow.
+
+                //printf("[%d]\n", 10 * requests_issued + i / 2, config.data[10 * requests_issued + i / 2]);
             }
             len = redisFormatCommandArgv(&cmd,21,cmd_argv,NULL);
 
@@ -757,9 +755,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         }
 
         if (config.diff_value_random && test_is_selected("hset")) {
-            genBenchmarkRandomData(config.data, config.datasize);
-            config.data[config.datasize] = '\0';
-            len = redisFormatCommand(&cmd, "HSET myhash element:__rand_int__ %s", config.data);
+            len = redisFormatCommand(&cmd, "HSET myhash element:__rand_int__ %s", config.data[requests_issued]);
 
             c->obuf = sdsempty();
             c->obuf = sdscatlen(c->obuf,cmd,len);
@@ -2401,7 +2397,26 @@ int main(int argc, const char **argv) {
     do {
         genBenchmarkRandomData(data, config.datasize);
         data[config.datasize] = '\0';
-        config.data = data;
+        //config.data = data;
+
+        if (config.diff_value_random) {
+
+
+            int num_commands = config.requests;
+
+            if (test_is_selected("mset")) {
+                num_commands = config.requests * 10;
+            }
+            config.data = zmalloc(num_commands * sizeof(char*));
+            for (int i = 0; i < num_commands; ++i) {
+                config.data[i] = zmalloc(config.datasize+1);
+
+                genBenchmarkRandomData(config.data[i], config.datasize);
+                config.data[i][config.datasize] = '\0';
+                //printf ("%s\n\n", config.data[i]);
+            }
+            wait_send_signal();
+        }
 
         if (test_is_selected("ping_inline") || test_is_selected("ping"))
             benchmark("PING_INLINE","PING\r\n",6);

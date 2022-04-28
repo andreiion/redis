@@ -1,6 +1,6 @@
 #!/bin/bash
 
-clients_num=8
+clients_num=4
 
 redis_bridge_device_ip="172.18.0.2"
 docker_bridge_device_ip="172.17.0.2"
@@ -25,19 +25,36 @@ logdata() {
     #Log data into a 'name:value' format
     local name=$1
     local value=$2
-    printf '%s:%s\n' $1 $2 >> $log_file_name
-}
+    local log_depth=$(printf '\t%.0s' $(seq 1 $3))
+    if [ -z "$2" ]
+    then
+        if [ -z "$3" ]
+        then
+            printf '%s\n' $1 >> $log_file_name
+            return
+        fi
+        printf '%s%s\n' "$log_depth" $1 >> $log_file_name
+        return
+    fi
 
-function start_sar() {
-    # run sar in background
-    sudo sar -o sar.out -A -u 1 > /dev/null 2>&1 &
+    if [[ "$2" == "[" || "$2" == "{" ]];
+    then
+        if [ -z "$3" ]
+        then
+            printf '\"%s\": %s\n' $1 $2 >> $log_file_name
+            return
+        fi
+        printf '%s\"%s\": %s\n' "$log_depth" $1 $2 >> $log_file_name
+        return
+    fi
 
-    sudo sar -A -f sar.out > sar_$(hostname).txt
+    if [ -z "$3" ]
+    then
+        printf '\"%s\": \"%s\",\n' $1 $2 >> $log_file_name
+        return
+    fi
 
-}
-
-function export_sar() {
-    echo "da"
+    printf '%s\"%s\": \"%s\",\n' "$log_depth" $1 $2 >> $log_file_name
 }
 
 function start_profile_bpfcc()
@@ -133,13 +150,13 @@ function add_output_buffer_compressable_data() {
         redis-benchmark -h $docker_bridge_device_ip \
                         -t $test_type -c $clients_num \
                         -n $(expr $requests_num / "10") \
-                        -d $data_size -q -a redis -r 1000000000 --random-data 0 &
+                        -d $data_size -a redis -r 1000000000 --random-data 0 &
     else
         #redis-benchmark -h 172.17.0.2 -p 6379 -t set -c 50 -n 160000 -d 10000 -q -a redis -r 1000000000 --random-data 1
         redis-benchmark -h $docker_bridge_device_ip \
                         -t $test_type -c $clients_num \
                         -n $requests_num \
-                        -d $data_size -q -a redis -r 1000000000 --random-data 0 &
+                        -d $data_size -a redis -r 1000000000 --random-data 0 &
     fi
 }
 
@@ -147,7 +164,7 @@ add_output_buffer_real_data() {
     local real_data_test=$1
     #echo "-add real data"
     #redis-benchmark -h 172.17.0.2 -p 6379 -a redis -t real_data_string_mset
-    redis-benchmark -h $docker_bridge_device_ip -a redis -q -t $real_data_test &
+    redis-benchmark -h $docker_bridge_device_ip -a redis -t $real_data_test &
 }
 
 function flush_db() {
@@ -162,7 +179,7 @@ function populate_big_data() {
                     -t set -c $clients_num \
                     -n $requests_num \
                     -d $data_size \
-                    -q -a redis -r 1000000000 --random-data 1
+                    -q -a redis -r 1000000000 --random-data 1 > /dev/null
 }
 
 function restart_container() {
@@ -173,7 +190,7 @@ function restart_container() {
 function add_rate_limits() {
     local rate_limit=$1
     #echo "-set $rate_limit tbf limit"
-    logdata "rate-limit" $tbf_rate_limit
+    logdata "rate-limit" $tbf_rate_limit 2
     sudo docker exec redis_6379 tc qdisc add dev eth0 root tbf rate $rate_limit burst 5000000 limit 15000000 && \
     sudo docker exec redis_6380 tc qdisc add dev eth0 root tbf rate $rate_limit burst 5000000 limit 15000000
 }
@@ -194,21 +211,27 @@ function test1_random_data() {
     local cmp_type=$1
     local command_type=$2
     echo -e "Test 1. Populate buffer with random data while bulk sync"
-    logdata "data-type" "random"
+
+    logdata "{" "" 1
+    logdata "data-type" "random" 1
+
     flush_db
+    add_output_buffer_random_data $command_type
     populate_big_data
     wait_master_replica_online_sync
+
     restart_container
     add_rate_limits $tbf_rate_limit
-    #start_perf "redis_6380"
+    sleep 10 # that's how much it takes to build the dataset
     start_perf "redis_6379"
-    #start_profile_bpfcc "redis_6379"
-    logdata "command-type" $command_type
-    add_output_buffer_random_data $command_type
+    logdata "command-type" $command_type 2
+    kill -10 $(pidof redis-benchmark) #SIGUSR1 to start setting data
+
     wait_replica_bgsave
     export_perf "redis_6379" $cmp_type "random"
-    #export_profile_bpfcc "redis_6379" $cmp_type "random"
-    #export_perf "redis_6380" $cmp_type "random"
+
+    extract_latency
+    logdata "}," "" 1
     cleanup_test
 }
 
@@ -216,45 +239,52 @@ function test2_compressable_data() {
     local cmp_type=$1
     local command_type=$2
     echo -e "Test 2. Populate buffer with super compressable data while bulk sync"
-    logdata "data-type" "compressable"
+    logdata "{" "" 1
+    logdata "data-type" "compressable" 1
+
     flush_db
     populate_big_data
     wait_master_replica_online_sync
+
     restart_container
     add_rate_limits $tbf_rate_limit
     start_perf "redis_6379"
-    #start_profile_bpfcc "redis_6379"
-    #start_perf "redis_6380"
-    logdata "command-type" $command_type
+    logdata "command-type" $command_type 2
     add_output_buffer_compressable_data $command_type
+
     wait_replica_bgsave
     export_perf "redis_6379" $cmp_type "compressable"
-    #export_profile_bpfcc "redis_6379" $cmp_type "compressable"
-    #export_perf "redis_6380" $cmp_type "compressable"
+
+    extract_latency
+    logdata "}," "" 1
     cleanup_test
 }
 
 function test3_real_data() {
     local cmp_type=$1
-    local real_data_test=$2
-    local tbf_rate_limit=$3
+    local data_type=$2
+    local command_type=$3
+    local tbf_rate_limit=$4
     echo -e "Test 3. Populate buffer with real data while bulk sync"
-    logdata "data-type" $real_data_test
+    logdata "{" "" 1
+    logdata "data-type" $data_type 1
+
     flush_db
-    add_output_buffer_real_data $real_data_test
+    logdata "command-type" $command_type 2
+    add_output_buffer_real_data $command_type
     populate_big_data
     wait_master_replica_online_sync
+
     restart_container
     add_rate_limits $tbf_rate_limit
     sleep 15 # sleep 15 sec. This how much it takes for the SCAN and GET to complete
     start_perf "redis_6379"
-    #start_profile_bpfcc "redis_6379"
-    #start_perf "redis_6380"
     kill -10 $(pidof redis-benchmark) #SIGUSR1 to start setting data
     wait_replica_bgsave
-    export_perf "redis_6379" $cmp_type $real_data_test
-    #export_profile_bpfcc "redis_6379" $cmp_type $real_data_test
-    #export_perf "redis_6380" $cmp_type $real_data_test
+
+    export_perf "redis_6379" $cmp_type $command_type
+    extract_latency
+    logdata "}," "" 1
     cleanup_test
 }
 
@@ -273,9 +303,32 @@ function wait_replica_bgsave() {
     done
     DURATION=$[ $(date +%s) - ${START} ]
     echo "-bulk sync finished in ${DURATION} sec"
-    logdata "bulk-sync-duration" ${DURATION}
-    logdata "used-mem" $(get_max_mem_used)
-    #echo "used-mem: $(get_max_mem_used)"
+    logdata "bulk-sync-duration" ${DURATION} 2
+    logdata "used-mem" $(get_max_mem_used) 2
+}
+
+function extract_latency() {
+    local compression_type=$1
+    local data_type=$2
+    local command_type=$3
+
+    rps=$(grep "Summary" -A 4 $redis_benchmark_file | awk 'NR == 2' | awk -F: '{print $2}' | awk '{print $1}')
+    latency_avg=$(grep "Summary" -A 4 $redis_benchmark_file | awk 'NR == 5' | awk '{print $1}')
+    latency_min=$(grep "Summary" -A 4 $redis_benchmark_file | awk 'NR == 5' | awk '{print $2}')
+    latency_p50=$(grep "Summary" -A 4 $redis_benchmark_file | awk 'NR == 5' | awk '{print $3}')
+    latency_p95=$(grep "Summary" -A 4 $redis_benchmark_file | awk 'NR == 5' | awk '{print $4}')
+    latency_p99=$(grep "Summary" -A 4 $redis_benchmark_file | awk 'NR == 5' | awk '{print $5}')
+    latency_max=$(grep "Summary" -A 4 $redis_benchmark_file | awk 'NR == 5' | awk '{print $6}')
+
+    logdata "latency-report" "{" 2
+     logdata "rps" $rps 3;
+     logdata "avg" $latency_avg 3;
+     logdata "min" $latency_min 3;
+     logdata "p50" $latency_p50 3;
+     logdata "p95" $latency_p95 3;
+     logdata "p99" $latency_p99 3;
+     logdata "max" $latency_max 3;
+    logdata "}" "" 2
 }
 
 main () {
@@ -284,29 +337,36 @@ main () {
 
     #test1_random_data "no" "set"
     #exit
+
+    logdata "{" ""
+    logdata "test" "["
     for i in "${compression_types[@]}"
     do
         #echo -e "-start testing $i compression"
+        logdata "{" ""
         logdata "compression-type" $i
+        logdata "items" "[" 1
         set_redis_compression_type $i
 
 
         # execute different command types for the random and compressable data
         for j in "${command_types[@]}"
         do
-            test1_random_data "$i" "$j"
+            test1_random_data "$i" "$j" > $redis_benchmark_file
         done
         for j in "${command_types[@]}"
         do
-            test2_compressable_data "$i" "$j"
+            test2_compressable_data "$i" "$j" > $redis_benchmark_file
         done
 
-        test3_real_data "$i" "real_data_string_mset" "500mbit"
-        test3_real_data "$i" "real_data_string_set" "250mbit" #set is slow, reduce rate limit.
+        test3_real_data "$i" "real" "real_data_string_mset" "500mbit" > $redis_benchmark_file
+        test3_real_data "$i" "real" "real_data_string_set"  "250mbit" > $redis_benchmark_file #set is slow, reduce rate limit.
 
-        printf "\n" >> $log_file_name
+        printf "]\n" >> $log_file_name
+        logdata "}" ""
     done
-
+    logdata "]" ""
+    logdata "}" ""
 }
 
 main
