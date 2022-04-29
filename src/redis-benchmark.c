@@ -2400,8 +2400,6 @@ int main(int argc, const char **argv) {
         //config.data = data;
 
         if (config.diff_value_random) {
-
-
             int num_commands = config.requests;
 
             if (test_is_selected("mset")) {

@@ -3481,6 +3481,10 @@ int closeClientOnOutputBufferLimitReached(client *c, int async) {
     if (checkClientOutputBufferLimits(c)) {
         sds client = catClientInfoString(sdsempty(),c);
 
+        //Only once
+        if (!server.bgsave_close_time && c->replstate == SLAVE_STATE_WAIT_BGSAVE_END)
+            server.bgsave_close_time = server.unixtime - c->ctime;
+
         if (async) {
             freeClientAsync(c);
             serverLog(LL_WARNING,

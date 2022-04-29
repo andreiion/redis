@@ -8,7 +8,7 @@ docker_bridge_device_ip="172.17.0.2"
 requests_num="160000"
 data_size="10000"
 
-tbf_rate_limit="500mbit"
+tbf_bulksync_rate_limit="500mbit"
 
 #real_data_test="real_data_string_mset"
 log_date=`date +%Y:%m:%d:%H:%M`
@@ -16,7 +16,8 @@ log_file_name="log_$log_date.txt"
 
 redis_benchmark_file="redis-benchmark.out"
 
-declare -a compression_types=("no" "lzf" "lz4")
+#declare -a compression_types=("no" "lzf" "lz4")
+declare -a compression_types=("lzf")
 
 #"mset" "sadd"
 declare -a command_types=("set" "mset" "hset")
@@ -102,6 +103,14 @@ function set_redis_compression_type() {
     redis-cli -a redis -h $redis_bridge_device_ip -p 6379 CONFIG SET replica-output-buffer-compression $compression_type 2> /dev/null
 
     redis-cli -a redis -h $redis_bridge_device_ip -p 6379 CONFIG GET replica-output-buffer-compression 2> /dev/null
+}
+
+function set_redis_client_output_buffer_hard_limit() {
+    local hard_limit=$1
+
+    redis-cli -a redis -h $redis_bridge_device_ip -p 6379 CONFIG SET client-output-buffer-limit "replica $hard_limit 0 0" 2> /dev/null
+
+    redis-cli -a redis -h $redis_bridge_device_ip -p 6379 CONFIG GET client-output-buffer-limit 2> /dev/null
 }
 
 function get_replica_offset() {
@@ -190,7 +199,7 @@ function restart_container() {
 function add_rate_limits() {
     local rate_limit=$1
     #echo "-set $rate_limit tbf limit"
-    logdata "rate-limit" $tbf_rate_limit 2
+    logdata "rate-limit" $rate_limit 2
     sudo docker exec redis_6379 tc qdisc add dev eth0 root tbf rate $rate_limit burst 5000000 limit 15000000 && \
     sudo docker exec redis_6380 tc qdisc add dev eth0 root tbf rate $rate_limit burst 5000000 limit 15000000
 }
@@ -210,6 +219,7 @@ function cleanup_test() {
 function test1_random_data() {
     local cmp_type=$1
     local command_type=$2
+    local rate_limit=$3
     echo -e "Test 1. Populate buffer with random data while bulk sync"
 
     logdata "{" "" 1
@@ -221,7 +231,7 @@ function test1_random_data() {
     wait_master_replica_online_sync
 
     restart_container
-    add_rate_limits $tbf_rate_limit
+    add_rate_limits $rate_limit
     sleep 10 # that's how much it takes to build the dataset
     start_perf "redis_6379"
     logdata "command-type" $command_type 2
@@ -238,6 +248,7 @@ function test1_random_data() {
 function test2_compressable_data() {
     local cmp_type=$1
     local command_type=$2
+    local rate_limit=$3
     echo -e "Test 2. Populate buffer with super compressable data while bulk sync"
     logdata "{" "" 1
     logdata "data-type" "compressable" 1
@@ -247,7 +258,7 @@ function test2_compressable_data() {
     wait_master_replica_online_sync
 
     restart_container
-    add_rate_limits $tbf_rate_limit
+    add_rate_limits $rate_limit
     start_perf "redis_6379"
     logdata "command-type" $command_type 2
     add_output_buffer_compressable_data $command_type
@@ -264,7 +275,7 @@ function test3_real_data() {
     local cmp_type=$1
     local data_type=$2
     local command_type=$3
-    local tbf_rate_limit=$4
+    local rate_limit=$4
     echo -e "Test 3. Populate buffer with real data while bulk sync"
     logdata "{" "" 1
     logdata "data-type" $data_type 1
@@ -276,7 +287,7 @@ function test3_real_data() {
     wait_master_replica_online_sync
 
     restart_container
-    add_rate_limits $tbf_rate_limit
+    add_rate_limits $rate_limit
     sleep 15 # sleep 15 sec. This how much it takes for the SCAN and GET to complete
     start_perf "redis_6379"
     kill -10 $(pidof redis-benchmark) #SIGUSR1 to start setting data
@@ -319,24 +330,56 @@ function extract_latency() {
     latency_p95=$(grep "Summary" -A 4 $redis_benchmark_file | awk 'NR == 5' | awk '{print $4}')
     latency_p99=$(grep "Summary" -A 4 $redis_benchmark_file | awk 'NR == 5' | awk '{print $5}')
     latency_max=$(grep "Summary" -A 4 $redis_benchmark_file | awk 'NR == 5' | awk '{print $6}')
+    exec_time=$(grep "requests completed in" $redis_benchmark_file | awk '{print $5}')
 
     logdata "latency-report" "{" 2
-     logdata "rps" $rps 3;
-     logdata "avg" $latency_avg 3;
-     logdata "min" $latency_min 3;
-     logdata "p50" $latency_p50 3;
-     logdata "p95" $latency_p95 3;
-     logdata "p99" $latency_p99 3;
-     logdata "max" $latency_max 3;
+    logdata "exec_time_sec" $exec_time 3;
+    logdata "rps" $rps 3;
+    logdata "avg" $latency_avg 3;
+    logdata "min" $latency_min 3;
+    logdata "p50" $latency_p50 3;
+    logdata "p95" $latency_p95 3;
+    logdata "p99" $latency_p99 3;
+    logdata "max" $latency_max 3;
     logdata "}" "" 2
 }
 
-main () {
+function run_buffer_limit_test() {
+    echo "limit"
+    local max_mem_buffer_bytes=2000000000 #2GB - data is not that big
+    local mem_step=100000000 #100MB each iteration
+
+    local max_rate_limit_bits_per_sec=1000000000 #1gbit
+    local rate_step=20000000 #20mbit each iteration
+
+    local mem_buffer_size=0
+    while [[ $mem_buffer_size -lt $max_mem_buffer_bytes ]] ; do
+        (( mem_buffer_size += $mem_step ))
+        echo "size: $mem_buffer_size\n"
+
+        local rate_limit=100000000 #100mbit starting speed
+        while [[ $rate_limit -lt $max_rate_limit_bits_per_sec ]] ; do
+        (( rate_limit += $rate_step ))
+            echo "rate limit: $rate_limit; "
+
+            # redeploy for all tests to be able to extract the filling buffer time
+            redeploy_containers
+            wait_master_replica_online_sync
+
+            #set buffer limit
+            set_redis_client_output_buffer_hard_limit $mem_buffer_size
+            #set rate limit for eth1
+        done
+    done
+    exit
+
     redeploy_containers
     wait_master_replica_online_sync
+}
 
-    #test1_random_data "no" "set"
-    #exit
+function run_no_limit_test() {
+    redeploy_containers
+    wait_master_replica_online_sync
 
     logdata "{" ""
     logdata "test" "["
@@ -352,21 +395,46 @@ main () {
         # execute different command types for the random and compressable data
         for j in "${command_types[@]}"
         do
-            test1_random_data "$i" "$j" > $redis_benchmark_file
-        done
-        for j in "${command_types[@]}"
-        do
-            test2_compressable_data "$i" "$j" > $redis_benchmark_file
+            test1_random_data "$i" "$j" $tbf_bulksync_rate_limit > $redis_benchmark_file
         done
 
+        for j in "${command_types[@]}"
+        do
+            test2_compressable_data "$i" "$j" $tbf_bulksync_rate_limit > $redis_benchmark_file
+        done
         test3_real_data "$i" "real" "real_data_string_mset" "500mbit" > $redis_benchmark_file
         test3_real_data "$i" "real" "real_data_string_set"  "250mbit" > $redis_benchmark_file #set is slow, reduce rate limit.
 
         printf "]\n" >> $log_file_name
         logdata "}" ""
+
     done
     logdata "]" ""
     logdata "}" ""
 }
 
-main
+main () {
+
+    buffer_limit_flag=0
+    while getopts 'l' name
+    do
+        case $name in
+        l)
+            buffer_limit_flag=1
+            bval="$OPTARG"
+            ;;
+        ?)
+            printf "Usage: %s: [-b value] args\n" $0
+            exit 2
+            ;;
+        esac
+    done
+
+    if [ $buffer_limit_flag -eq 0 ]; then
+        run_no_limit_test
+    else
+        run_buffer_limit_test
+    fi
+}
+
+main "$@"
