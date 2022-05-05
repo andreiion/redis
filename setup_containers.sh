@@ -51,7 +51,6 @@ function load_real_data_redis() {
 }
 
 main () {
-
     cd $docker_path && deploy_master_slave_containers
 }
 
