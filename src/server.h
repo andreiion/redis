@@ -310,6 +310,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_OBUF_NO_COMPRESSION  0
 #define CLIENT_OBUF_LZF_COMPRESSION 1
 #define CLIENT_OBUF_LZ4_COMPRESSION 2
+#define CLIENT_OBUF_ZSTD_COMPRESSION 3
 
 /* Slave replication state. Used in server.repl_state for slaves to remember
  * what to do next. */

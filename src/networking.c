@@ -36,10 +36,11 @@
 #include <sys/uio.h>
 #include <math.h>
 #include <ctype.h>
+#include <zstd.h>
 
 
 
-#define MIN_COMPRESS_BYTES 64
+#define MIN_COMPRESS_BYTES 64s
 
 static void setProtocolError(const char *errstr, client *c);
 int postponeClientRead(client *c);
@@ -217,6 +218,8 @@ int compress_reply (const char* source, char* dest, int compressedSize, int maxO
         return lzf_compress(source, compressedSize, dest, maxOutputSize);
     } else if (server.client_obuf_compression == CLIENT_OBUF_LZ4_COMPRESSION) {
         return LZ4_compress_default(source, dest, compressedSize, maxOutputSize);
+    } else if (server.client_obuf_compression == CLIENT_OBUF_ZSTD_COMPRESSION) {
+        return ZSTD_compress(dest, maxOutputSize, source, compressedSize, 1);
     }
     return -1;
 }
@@ -228,6 +231,8 @@ int decompress_reply (const char* source, char* dest, int compressedSize, int ma
         return lzf_decompress(source, compressedSize, dest, maxDecompressedSize);
     } else if (server.client_obuf_compression == CLIENT_OBUF_LZ4_COMPRESSION) {
         return LZ4_decompress_safe(source, dest, compressedSize, maxDecompressedSize);
+    } else if (server.client_obuf_compression == CLIENT_OBUF_ZSTD_COMPRESSION) {
+        return ZSTD_decompress(dest, maxDecompressedSize, source, compressedSize);
     }
     return -1;
 }
@@ -3321,15 +3326,17 @@ int getCompressionByType(char* compression) {
     if (!strcasecmp(compression,"no")) return CLIENT_OBUF_NO_COMPRESSION;
     else if (!strcasecmp(compression,"lzf")) return CLIENT_OBUF_LZF_COMPRESSION;
     else if (!strcasecmp(compression,"lz4")) return CLIENT_OBUF_LZ4_COMPRESSION;
+    else if (!strcasecmp(compression,"zstd")) return CLIENT_OBUF_ZSTD_COMPRESSION;
     else return -1;
 }
 
 char *getCompressionTypeName(int compression_type) {
     switch(compression_type) {
-    case CLIENT_OBUF_NO_COMPRESSION:  return "no";
-    case CLIENT_OBUF_LZF_COMPRESSION: return "lzf";
-    case CLIENT_OBUF_LZ4_COMPRESSION: return "lz4";
-    default:                          return NULL;
+    case CLIENT_OBUF_NO_COMPRESSION:   return "no";
+    case CLIENT_OBUF_LZF_COMPRESSION:  return "lzf";
+    case CLIENT_OBUF_LZ4_COMPRESSION:  return "lz4";
+    case CLIENT_OBUF_ZSTD_COMPRESSION: return "zstd";
+    default:                           return NULL;
     }
 }
 

@@ -23,8 +23,8 @@ declare -a compression_types=("lz4" "no" "lzf")
 declare -a command_types=("set" "mset" "hset")
 #declare -a command_types=("set")
 
-declare -a data_types=("real" "random" "compressable")
-#declare -a data_types=("real")
+#declare -a data_types=("real" "random" "compressable")
+declare -a data_types=("real" "random")
 
 logdata() {
     #Log data into a 'name:value' format
@@ -351,7 +351,7 @@ function test1_random_data() {
 
     echo "sleep 10"
     sleep 10 # that's how much it takes to build the dataset
-    #start_perf "redis_6379"
+    start_perf "redis_6379"
     logdata "command-type" $command_type 1
     kill -10 $(pidof redis-benchmark) #SIGUSR1 to start setting data
 
@@ -364,7 +364,7 @@ function test1_random_data() {
         extract_latency
     fi
 
-    #export_perf "redis_6379" $cmp_type "random"
+    export_perf "redis_6379" $cmp_type "random"
 
     logdata "}," "" 1
     cleanup_test
@@ -394,7 +394,7 @@ function test2_compressable_data() {
         set_redis_client_output_buffer_hard_limit  $client_output_buffer_limit
     fi
 
-    #start_perf "redis_6379"
+    start_perf "redis_6379"
     logdata "command-type" $command_type 1
     add_output_buffer_compressable_data $command_type
 
@@ -406,7 +406,7 @@ function test2_compressable_data() {
         wait_replica_bgsave
         extract_latency
     fi
-    #export_perf "redis_6379" $cmp_type "compressable"
+    export_perf "redis_6379" $cmp_type "compressable"
 
     logdata "}," "" 1
     cleanup_test
@@ -430,7 +430,7 @@ function test3_real_data() {
     wait_master_replica_online_sync
 
     sleep 15 # sleep 15 sec. This how much it takes for the SCAN and GET to complete
-    #start_perf "redis_6379"
+    start_perf "redis_6379"
 
     restart_container
     add_rate_limits $rate_limit $host_rate_limit
@@ -453,7 +453,7 @@ function test3_real_data() {
         extract_latency
     fi
 
-    #export_perf "redis_6379" $cmp_type $command_type
+    export_perf "redis_6379" $cmp_type $command_type
     logdata "}," "" 1
     cleanup_test
 }
@@ -601,12 +601,12 @@ function run_tests() {
             do
                 echo "$cmd_type"
                 
-                local max_mem_size_MB=1100 #1GB - data is not that big
-                local min_mem_size_MB=100  #200 MB
-                local mem_step_MB=50 #50MB each iteration
+                local max_mem_size_MB=1600 #1GB - data is not that big
+                local min_mem_size_MB=200 #200 MB
+                local mem_step_MB=10 #50MB each iteration
                 local max_rate_limit_mbps=600 #600mbit
                 local min_rate_limit_mbps=50 #50mbit
-                local rate_step=20 #25mbit each iteration
+                local rate_step=10 #25mbit each iteration
                 local mem_buffer_size=$max_mem_size_MB
                 local host_rate_limit=$max_rate_limit_mbps
                 while [[ $mem_buffer_size -gt $min_mem_size_MB ]] ; do
