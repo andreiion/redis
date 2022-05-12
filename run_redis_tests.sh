@@ -5,10 +5,10 @@ clients_num=4
 redis_bridge_device_ip="172.18.0.2"
 docker_bridge_device_ip="172.17.0.2"
 
-requests_num="160000"
-data_size="10000"
+requests_num="1600000"
+data_size="1000"
 
-tbf_bulksync_rate_limit="300mbit"
+tbf_bulksync_rate_limit="250mbit"
 
 #real_data_test="real_data_string_mset"
 log_date=`date +%Y:%m:%d:%H:%M`
@@ -16,15 +16,15 @@ log_file_name="log_$log_date.txt"
 
 redis_benchmark_file="redis-benchmark.out"
 
-declare -a compression_types=("lz4" "no" "lzf")
-#declare -a compression_types=("lzf")
+#declare -a compression_types=("lz4" "no" "lzf" "zstd")
+declare -a compression_types=("zstd")
 
 #"mset" "sadd"
-declare -a command_types=("set" "mset" "hset")
-#declare -a command_types=("set")
+#declare -a command_types=("set" "mset" "hset")
+declare -a command_types=("set")
 
 #declare -a data_types=("real" "random" "compressable")
-declare -a data_types=("real" "random")
+declare -a data_types=("random")
 
 logdata() {
     #Log data into a 'name:value' format
@@ -94,21 +94,22 @@ function export_profile_bpfcc()
 function start_perf() {
     local container_id=$1
     echo "start perf $container_id"
-    sudo docker exec --privileged $container_id /bin/bash -c '/usr/bin/perf record -o perf.data -g --pid $(pgrep -w redis-server -d, ) -F 999 -- sleep 60 ' &
+    sudo docker exec --privileged $container_id /bin/bash -c '/usr/bin/perf record -o perf.data -g --pid $(pgrep -w redis-server -d, ) -F 999 -- sleep 240 ' &
 }
 
 function export_perf() {
     local container_id=$1
     local cmp_type=$2
     local data_type=$3
-    echo "kill $container_id $cmp_type $data_type"
+    local command_type=$4
+    echo "kill perf for $container_id $cmp_type $data_type"
     sudo docker exec $container_id /bin/bash -c 'kill -SIGTERM $(pidof perf)'
     sudo docker exec $container_id /bin/bash -c 'while kill -0 $(pgrep perf) >/dev/null 2>&1; do sleep 1; done' #wait for proc to finish. can't do wait because perf started in another bash
     sudo docker exec $container_id /bin/bash -c 'perf script --input /perf.data > redis.perf.stacks'
     sudo docker cp $container_id:/redis.perf.stacks ~/${container_id}_perf.stacks
 
     ~/FlameGraph/stackcollapse-perf.pl ~/${container_id}_perf.stacks > ${container_id}_out.perf-folded
-    sudo ~/FlameGraph/flamegraph.pl ${container_id}_out.perf-folded > ${container_id}_${cmp_type}_${data_type}_perf.svg
+    sudo ~/FlameGraph/flamegraph.pl ${container_id}_out.perf-folded > ${container_id}_${cmp_type}_${data_type}_${command_type}.svg
 }
 
 function set_redis_compression_type() {
@@ -172,6 +173,18 @@ function wait_master_replica_online_sync() {
     while [ "$(get_replica_offset)" != "$(get_master_offset)" ]; do
         sleep 1
     done
+
+}
+
+function wait_master_replica_online_sync_log() {
+    #echo "-wait for offsets to be synced $(get_replica_offset):$(get_master_offset)"
+    START_ONLINE="$(date +%s)"
+    while [ "$(get_replica_offset)" != "$(get_master_offset)" ]; do
+        sleep 0.1
+    done
+    DURATION_ONLINE=$[ $(date +%s) - ${START_ONLINE} ]
+    echo "online offset sync finished in ${DURATION_ONLINE} sec"
+    logdata "online-sync-duration" ${DURATION_ONLINE} 1
 }
 
 function wait_replica_bgsave() {
@@ -271,8 +284,8 @@ function add_output_buffer_compressable_data() {
 add_output_buffer_real_data() {
     local real_data_test="real_data_string_${1}"
     #echo "-add real data"
-    #redis-benchmark -h 172.17.0.2 -p 6379 -a redis -t real_data_string_mset
-    redis-benchmark -h $docker_bridge_device_ip -a redis -t $real_data_test &
+    #redis-benchmark -h 172.17.0.2 -p 6379 -a redis -t real_data_string_set
+    redis-benchmark -h $docker_bridge_device_ip -a redis -t $real_data_test -c $clients_num &
 }
 
 function flush_db() {
@@ -281,7 +294,7 @@ function flush_db() {
 }
 
 function populate_big_data() {
-    #echo "-populate DB with a lot of ramdom data"
+    echo "-populate DB with a lot of ramdom data"
     #redis-benchmark -h $docker_bridge_device_ip -t set,lpush -c $clients_num -n $requests_num -d $data_size -q -a redis --random-data 1
     redis-benchmark -h $docker_bridge_device_ip \
                     -t set -c $clients_num \
@@ -297,15 +310,17 @@ function restart_container() {
 
 function add_rate_limits() {
     local rate_limit=$1
-    local host_rate_limit=$2
-    #echo "-set $rate_limit tbf limit"
+    local client_rate_limit=$2
+    echo "set $rate_limit tbf limit"
     logdata "rate-limit" $rate_limit 1
-    sudo docker exec redis_6379 tc qdisc add dev eth0 root tbf rate $rate_limit burst 5000000 limit 15000000 & \
+
+    eth_dev_redis_6379=$(sudo docker exec redis_6379 /bin/bash -c 'ip a s  | grep 172.18.* | awk "{print \$NF}"')
+    sudo docker exec redis_6379 tc qdisc add dev $eth_dev_redis_6379 root tbf rate $rate_limit burst 5000000 limit 15000000 & \
     sudo docker exec redis_6380 tc qdisc add dev eth0 root tbf rate $rate_limit burst 5000000 limit 15000000
 
-    if [[ ! -z $host_rate_limit ]]; then
-        logdata "host-rate-limit" $host_rate_limit 1
-        sudo tc qdisc add dev docker0 root tbf rate $host_rate_limit burst 5000000 limit 15000000
+    if [[ ! -z $client_rate_limit ]]; then
+        logdata "client-rate-limit" $client_rate_limit 1
+        sudo tc qdisc add dev docker0 root tbf rate $client_rate_limit burst 5000000 limit 15000000
     fi
 }
 
@@ -315,9 +330,28 @@ function redeploy_containers() {
     sleep 1
 }
 
+function stop_start_containers() { 
+
+    #sudo docker rm -f redis_6380 redis_6379
+    #sudo docker run --cap-add=ALL -d --network redis-bridge --name redis_6379 redis_compr redis-server \
+    #                /etc/redis/redis_server_6379.conf --loglevel debug
+    #sudo docker run --cap-add=ALL -d --network redis-bridge --name redis_6380 redis_compr redis-server \
+    #                /etc/redis/redis_server_6380.conf --loglevel debug
+
+    #sudo docker network connect bridge redis_6379
+
+    sudo docker stop redis_6380
+    sudo docker stop redis_6379
+
+    sudo docker start redis_6379
+    sudo docker start redis_6380
+}
+
 function cleanup_test() {
     echo "cleanup test"
-    sudo docker exec redis_6379 tc qdisc del dev eth0 root
+
+    eth_dev_redis_6379=$(sudo docker exec redis_6379 /bin/bash -c 'ip a s  | grep 172.18.* | awk "{print \$NF}"')
+    sudo docker exec redis_6379 tc qdisc del dev $eth_dev_redis_6379 root
     sudo docker exec redis_6380 tc qdisc del dev eth0 root
 
     sudo tc qdisc del dev docker0 root
@@ -327,27 +361,20 @@ function test1_random_data() {
     local cmp_type=$1
     local command_type=$2
     local rate_limit=$3
-    local host_rate_limit=$4
+    local client_rate_limit=$4
     local client_output_buffer_limit=$5
     echo -e "Test 1. Populate buffer with random data while bulk sync"
 
     logdata "{" "" 1
     logdata "data-type" "random" 1
 
-    flush_db
+    stop_start_containers
     add_output_buffer_random_data $command_type
     populate_big_data
     wait_master_replica_online_sync
 
     restart_container
-    add_rate_limits $rate_limit $host_rate_limit
-
-    if [ ! -z $client_output_buffer_limit ]; then
-        echo "client_output_buffer_limit set to $client_output_buffer_limit"
-
-        logdata "client-output-buffer-limit" $client_output_buffer_limit 1
-        set_redis_client_output_buffer_hard_limit  $client_output_buffer_limit
-    fi
+    add_rate_limits $rate_limit $client_rate_limit
 
     echo "sleep 10"
     sleep 10 # that's how much it takes to build the dataset
@@ -355,16 +382,15 @@ function test1_random_data() {
     logdata "command-type" $command_type 1
     kill -10 $(pidof redis-benchmark) #SIGUSR1 to start setting data
 
-    if [ ! -z $client_output_buffer_limit ]; then
-        echo "call wait_buffer_filled"
-        wait_buffer_filled
-    else
-        echo "call wait_replica_bgsave"
-        wait_replica_bgsave
-        extract_latency
-    fi
+    echo "call wait_replica_bgsave"
+    wait_replica_bgsave
+    
+    #Test the time it took to decompress and send the data to the replica
+    cleanup_test
+    wait_master_replica_online_sync_log
 
-    export_perf "redis_6379" $cmp_type "random"
+    extract_latency
+    export_perf "redis_6379" $cmp_type "random"  $command_type
 
     logdata "}," "" 1
     cleanup_test
@@ -374,18 +400,18 @@ function test2_compressable_data() {
     local cmp_type=$1
     local command_type=$2
     local rate_limit=$3
-    local host_rate_limit=$4
+    local client_rate_limit=$4
     local client_output_buffer_limit=$5
     echo -e "Test 2. Populate buffer with super compressable data while bulk sync"
     logdata "{" "" 1
     logdata "data-type" "compressable" 1
 
-    flush_db
+    stop_start_containers
     populate_big_data
     wait_master_replica_online_sync
 
     restart_container
-    add_rate_limits $rate_limit $host_rate_limit
+    add_rate_limits $rate_limit $client_rate_limit
 
     if [ ! -z $client_output_buffer_limit ]; then
         echo "client_output_buffer_limit set to $client_output_buffer_limit"
@@ -398,15 +424,15 @@ function test2_compressable_data() {
     logdata "command-type" $command_type 1
     add_output_buffer_compressable_data $command_type
 
-    if [ ! -z $client_output_buffer_limit ]; then
-        echo "call wait_buffer_filled"
-        wait_buffer_filled
-    else
-        echo "call wait_replica_bgsave"
-        wait_replica_bgsave
-        extract_latency
-    fi
-    export_perf "redis_6379" $cmp_type "compressable"
+    echo "call wait_replica_bgsave"
+    wait_replica_bgsave
+
+    #Test the time it took to decompress and send the data to the replica
+    cleanup_test
+    wait_master_replica_online_sync_log
+
+    extract_latency
+    export_perf "redis_6379" $cmp_type "compressable" $command_type
 
     logdata "}," "" 1
     cleanup_test
@@ -417,13 +443,13 @@ function test3_real_data() {
     local data_type=$2
     local command_type=$3
     local rate_limit=$4
-    local host_rate_limit=$5
+    local client_rate_limit=$5
     local client_output_buffer_limit=$6
     echo -e "Test 3. Populate buffer with real data while bulk sync"
     logdata "{" "" 1
     logdata "data-type" $data_type 1
 
-    flush_db
+    stop_start_containers
     logdata "command-type" $command_type 1
     add_output_buffer_real_data $command_type
     populate_big_data
@@ -433,27 +459,20 @@ function test3_real_data() {
     start_perf "redis_6379"
 
     restart_container
-    add_rate_limits $rate_limit $host_rate_limit
-
-    if [ ! -z $client_output_buffer_limit ]; then
-        echo "client_output_buffer_limit set to $client_output_buffer_limit"
-
-        logdata "client-output-buffer-limit" $client_output_buffer_limit 1
-        set_redis_client_output_buffer_hard_limit  $client_output_buffer_limit
-    fi
+    add_rate_limits $rate_limit $client_rate_limit
 
     kill -10 $(pidof redis-benchmark) #SIGUSR1 to start setting data
     
-    if [ ! -z $client_output_buffer_limit ]; then
-        echo "call wait_buffer_filled"
-        wait_buffer_filled
-    else
-        echo "call wait_replica_bgsave"
-        wait_replica_bgsave
-        extract_latency
-    fi
+    echo "call wait_replica_bgsave"
+    wait_replica_bgsave
 
-    export_perf "redis_6379" $cmp_type $command_type
+    #Test the time it took to decompress and send the data to the replica
+    cleanup_test
+    wait_master_replica_online_sync_log
+
+    extract_latency
+    export_perf "redis_6379" $cmp_type $data_type $command_type
+
     logdata "}," "" 1
     cleanup_test
 }
@@ -461,7 +480,7 @@ function test3_real_data() {
 function test_all_data() {
     local cmp_type=$1; local data_type=$2
     local command_type=$3; local rate_limit=$4
-    local host_rate_limit=$5; local client_output_buffer_limit=$6
+    local client_rate_limit=$5; local client_output_buffer_limit=$6
 
     echo -e "Run test Populate buffer with ${data_type} data while bulk sync"
     logdata "{" "" 1
@@ -470,7 +489,6 @@ function test_all_data() {
 
     setup_test_env "$cmp_type"
 
-    flush_db
     if [[ "$data_type" == "random" ]]; then
         add_output_buffer_random_data $command_type
     elif [[  "$data_type" == "real" ]]; then
@@ -484,7 +502,7 @@ function test_all_data() {
     fi
 
     restart_container
-    add_rate_limits $rate_limit $host_rate_limit
+    add_rate_limits $rate_limit $client_rate_limit
 
     if [ ! -z $client_output_buffer_limit ]; then
         echo "client_output_buffer_limit set to $client_output_buffer_limit"
@@ -495,7 +513,7 @@ function test_all_data() {
 
     if [[ "$data_type" == "random" ]]; then
         sleep 10 # that's how much it takes to build the dataset
-    elif [[  "$data_type" == "coompressable"  ]]; then
+    elif [[  "$data_type" == "compressable"  ]]; then
        add_output_buffer_compressable_data $command_type
     fi 
     #start_perf "redis_6379"
@@ -558,15 +576,15 @@ function run_no_limit_test() {
         # execute different command types for the random and compressable data
         for j in "${command_types[@]}"
         do
-            test1_random_data "$i" "$j" $tbf_bulksync_rate_limit > $redis_benchmark_file
+            test1_random_data "$i" "$j" $tbf_bulksync_rate_limit | tee $redis_benchmark_file
         done
 
         for j in "${command_types[@]}"
         do
-            test2_compressable_data "$i" "$j" $tbf_bulksync_rate_limit > $redis_benchmark_file
+            test2_compressable_data "$i" "$j" $tbf_bulksync_rate_limit | tee $redis_benchmark_file
         done
-        test3_real_data "$i" "real" "mset" "500mbit" > $redis_benchmark_file
-        test3_real_data "$i" "real" "set"  "250mbit" > $redis_benchmark_file #set is slow, reduce rate limit.
+        test3_real_data "$i" "real" "mset" $tbf_bulksync_rate_limit | tee $redis_benchmark_file
+        test3_real_data "$i" "real" "set"  "200mbit" | tee $redis_benchmark_file #set is slow, reduce rate limit.
 
         printf "]\n" >> $log_file_name
         logdata "}" ""
@@ -578,13 +596,18 @@ function run_no_limit_test() {
 
 function setup_test_env() {
     local compression_type=$1
-    redeploy_containers
+    #redeploy_containers
+    #todo: do this instead of redeploy. we win a couple of seconds per test
+    stop_start_containers
     wait_master_replica_online_sync
     echo "compression_type is $compression_type"
     set_redis_compression_type $compression_type
 }
 
 function run_tests() {
+    redeploy_containers
+    wait_master_replica_online_sync
+
     logdata "{" ""
     logdata "test" "["
     for i in "${compression_types[@]}"
@@ -601,32 +624,32 @@ function run_tests() {
             do
                 echo "$cmd_type"
                 
-                local max_mem_size_MB=1600 #1GB - data is not that big
-                local min_mem_size_MB=200 #200 MB
-                local mem_step_MB=10 #50MB each iteration
+                local max_mem_size_MB=1100 #1GB - data is not that big
+                local min_mem_size_MB=100 #200 MB
+                local mem_step_MB=50 #50MB each iteration
                 local max_rate_limit_mbps=600 #600mbit
                 local min_rate_limit_mbps=50 #50mbit
-                local rate_step=10 #25mbit each iteration
+                local rate_step=25 #25mbit each iteration
                 local mem_buffer_size=$max_mem_size_MB
-                local host_rate_limit=$max_rate_limit_mbps
+                local client_rate_limit=$max_rate_limit_mbps
                 while [[ $mem_buffer_size -gt $min_mem_size_MB ]] ; do
                     (( mem_buffer_size -= $mem_step_MB ))
                     echo "size: $mem_buffer_size"
 
-                    while [[ $host_rate_limit -gt $min_rate_limit_mbps ]] ; do
+                    while [[ $client_rate_limit -gt $min_rate_limit_mbps ]] ; do
                         if [ "$data_type" = "real" -a "$cmd_type" = "hset" ]; then
                             echo "Skip $cmd_type command for the $data_type data type"
                             break 3
                         fi
 
                         test_all_data "$i" "$data_type" "$cmd_type" $tbf_bulksync_rate_limit \
-                                            "${host_rate_limit}mbit" \
+                                            "${client_rate_limit}mbit" \
                                             "${mem_buffer_size}mb" | tee $redis_benchmark_file
 
                         if [[ $(get_bgsave_close_time) -eq 0 ]]; then
                             break #found max rate limit. break from while
                         fi
-                        (( host_rate_limit -= $rate_step ))
+                        (( client_rate_limit -= $rate_step ))
                     done
                 done
             done
@@ -656,17 +679,14 @@ main () {
         esac
     done
 
-    cleanup_test
-
-    START="$(date +%s)"
+    START_TEST="$(date +%s)"
     if [ $buffer_limit_flag -eq 0 ]; then
         run_no_limit_test
     else
         run_tests
-        #run_buffer_limit_test
     fi
-    DURATION=$[ $(date +%s) - ${START} ]
-    echo "Tests finished in  ${DURATION} sec"
+    DURATION_TEST=$[ $(date +%s) - ${START_TEST} ]
+    echo "Tests finished in  ${DURATION_TEST} sec"
 }
 
 main "$@"
