@@ -16,20 +16,20 @@ log_file_name="log_$log_date.txt"
 
 redis_benchmark_file="redis-benchmark.out"
 
-#declare -a compression_types=("lz4" "no" "lzf" "zstd")
-declare -a compression_types=("zstd")
+declare -a compression_types=("no" "lzf" "lz4" "zstd")
+#declare -a compression_types=("lzf")
 
 #"mset" "sadd"
-#declare -a command_types=("set" "mset" "hset")
-declare -a command_types=("set")
+declare -a command_types=("set" "mset" "hset")
+#declare -a command_types=("mset")
 
-#declare -a data_types=("real" "random" "compressable")
-declare -a data_types=("random")
+declare -a data_types=("real" "random" "compressible")
+#declare -a data_types=("random")
 
 logdata() {
     #Log data into a 'name:value' format
     local name=$1
-    local value=$2
+    local value="$2"
     local log_depth=$(printf '\t%.0s' $(seq 1 $3))
     local sig_end=$4
     if [ -z "$2" ]
@@ -47,28 +47,28 @@ logdata() {
     then
         if [ -z "$3" ]
         then
-            printf '\"%s\": %s\n' $name $value >> $log_file_name
+            printf '\"%s\": %s\n' $name "$value" >> $log_file_name
             return
         fi
-        printf '%s\"%s\": %s\n' "$log_depth" $name $value >> $log_file_name
+        printf '%s\"%s\": %s\n' "$log_depth" $name "$value" >> $log_file_name
         return
     fi
 
     if [ -z "$3" ]
     then
         if [[ "$sig_end" == "end" ]]; then
-            printf '\"%s\": \"%s\"\n' $name $value >> $log_file_name
+            printf '\"%s\": \"%s\"\n' $name "$value" >> $log_file_name
         return
         fi
-        printf '\"%s\": \"%s\",\n' $name $value >> $log_file_name
+        printf '\"%s\": \"%s\",\n' $name "$value" >> $log_file_name
         return
     fi
-
+ 
     if [[ "$sig_end" == "end" ]]; then
-        printf '%s\"%s\": \"%s\"\n' "$log_depth" $name $value >> $log_file_name
+        printf '%s\"%s\": \"%s\"\n' "$log_depth" $name "$value" >> $log_file_name
         return
     fi
-    printf '%s\"%s\": \"%s\",\n' "$log_depth" $name $value >> $log_file_name
+    printf '%s\"%s\": \"%s\",\n' "$log_depth" $name "$value" >> $log_file_name
 }
 
 function start_profile_bpfcc()
@@ -255,7 +255,7 @@ function add_output_buffer_random_data() {
                         -d $data_size -a redis -r 1000000000 \
                         --random-data 1 --diff-value-random 1 &
     else
-        #redis-benchmark -h 172.17.0.2 -p 6379 -t set -c 8 -n 1600000 -d 1000 -q -a redis -r 1000000000 --random-data 1 --diff-value-random 1
+        #redis-benchmark -h 172.17.0.2 -p 6379 -t set -c 4 -n 1600000 -d 1000 -q -a redis -r 1000000000 --random-data 1 --diff-value-random 1
         redis-benchmark -h $docker_bridge_device_ip \
                         -t $test_type -c $clients_num \
                         -n $requests_num \
@@ -264,9 +264,9 @@ function add_output_buffer_random_data() {
     fi
 }
 
-function add_output_buffer_compressable_data() {
+function add_output_buffer_compressible_data() {
     local test_type=$1
-    #echo "-add compressable data"
+    #echo "-add compressible data"
     if [ "$test_type" == "mset" ]; then
         redis-benchmark -h $docker_bridge_device_ip \
                         -t $test_type -c $clients_num \
@@ -299,7 +299,7 @@ function populate_big_data() {
     redis-benchmark -h $docker_bridge_device_ip \
                     -t set -c $clients_num \
                     -n $requests_num \
-                    -d $data_size \
+                    -d "1300" \
                     -q -a redis -r 1000000000 --random-data 1 > /dev/null
 }
 
@@ -332,14 +332,7 @@ function redeploy_containers() {
 
 function stop_start_containers() { 
 
-    #sudo docker rm -f redis_6380 redis_6379
-    #sudo docker run --cap-add=ALL -d --network redis-bridge --name redis_6379 redis_compr redis-server \
-    #                /etc/redis/redis_server_6379.conf --loglevel debug
-    #sudo docker run --cap-add=ALL -d --network redis-bridge --name redis_6380 redis_compr redis-server \
-    #                /etc/redis/redis_server_6380.conf --loglevel debug
-
-    #sudo docker network connect bridge redis_6379
-
+    sudo docker exec redis_6380 /bin/bash -c 'rm -rf *.rdb'
     sudo docker stop redis_6380
     sudo docker stop redis_6379
 
@@ -361,20 +354,29 @@ function test1_random_data() {
     local cmp_type=$1
     local command_type=$2
     local rate_limit=$3
-    local client_rate_limit=$4
     local client_output_buffer_limit=$5
     echo -e "Test 1. Populate buffer with random data while bulk sync"
 
     logdata "{" "" 1
+    logdata "start-test-time" "$(date)" 1
     logdata "data-type" "random" 1
 
     stop_start_containers
+    set_redis_compression_type $i
     add_output_buffer_random_data $command_type
     populate_big_data
     wait_master_replica_online_sync
 
     restart_container
-    add_rate_limits $rate_limit $client_rate_limit
+
+    #if [[ "$cmp_type" == "lzf" ]]; then
+    #    echo "Lower LZF rate limit as it's too slow"
+    #    add_rate_limits "200mbit"
+    #else
+    #    add_rate_limits $rate_limit
+    #fi
+    
+    add_rate_limits $rate_limit
 
     echo "sleep 10"
     sleep 10 # that's how much it takes to build the dataset
@@ -389,24 +391,27 @@ function test1_random_data() {
     cleanup_test
     wait_master_replica_online_sync_log
 
+    logdata "end-test-time" "$(date)" 1
     extract_latency
     export_perf "redis_6379" $cmp_type "random"  $command_type
 
     logdata "}," "" 1
-    cleanup_test
 }
 
-function test2_compressable_data() {
+function test2_compressible_data() {
     local cmp_type=$1
     local command_type=$2
     local rate_limit=$3
     local client_rate_limit=$4
     local client_output_buffer_limit=$5
-    echo -e "Test 2. Populate buffer with super compressable data while bulk sync"
+    echo -e "Test 2. Populate buffer with super compressible data while bulk sync"
+
     logdata "{" "" 1
-    logdata "data-type" "compressable" 1
+    logdata "start-test-time" "$(date)" 1
+    logdata "data-type" "compressible" 1
 
     stop_start_containers
+    set_redis_compression_type $i
     populate_big_data
     wait_master_replica_online_sync
 
@@ -422,7 +427,7 @@ function test2_compressable_data() {
 
     start_perf "redis_6379"
     logdata "command-type" $command_type 1
-    add_output_buffer_compressable_data $command_type
+    add_output_buffer_compressible_data $command_type
 
     echo "call wait_replica_bgsave"
     wait_replica_bgsave
@@ -431,11 +436,11 @@ function test2_compressable_data() {
     cleanup_test
     wait_master_replica_online_sync_log
 
+    logdata "end-test-time" "$(date)" 1
     extract_latency
-    export_perf "redis_6379" $cmp_type "compressable" $command_type
+    export_perf "redis_6379" $cmp_type "compressible" $command_type
 
     logdata "}," "" 1
-    cleanup_test
 }
 
 function test3_real_data() {
@@ -446,10 +451,13 @@ function test3_real_data() {
     local client_rate_limit=$5
     local client_output_buffer_limit=$6
     echo -e "Test 3. Populate buffer with real data while bulk sync"
+
     logdata "{" "" 1
+    logdata "start-test-time" "$(date)" 1
     logdata "data-type" $data_type 1
 
     stop_start_containers
+    set_redis_compression_type $i
     logdata "command-type" $command_type 1
     add_output_buffer_real_data $command_type
     populate_big_data
@@ -470,11 +478,11 @@ function test3_real_data() {
     cleanup_test
     wait_master_replica_online_sync_log
 
+    logdata "end-test-time" "$(date)" 1
     extract_latency
     export_perf "redis_6379" $cmp_type $data_type $command_type
 
     logdata "}," "" 1
-    cleanup_test
 }
 
 function test_all_data() {
@@ -513,8 +521,8 @@ function test_all_data() {
 
     if [[ "$data_type" == "random" ]]; then
         sleep 10 # that's how much it takes to build the dataset
-    elif [[  "$data_type" == "compressable"  ]]; then
-       add_output_buffer_compressable_data $command_type
+    elif [[  "$data_type" == "compressible"  ]]; then
+       add_output_buffer_compressible_data $command_type
     fi 
     #start_perf "redis_6379"
     kill -10 $(pidof redis-benchmark) #SIGUSR1 to start setting data (random and real data case only)
@@ -571,9 +579,9 @@ function run_no_limit_test() {
         logdata "{" ""
         logdata "compression-type" $i
         logdata "items" "[" 1
-        set_redis_compression_type $i
+        
 
-        # execute different command types for the random and compressable data
+        # execute different command types for the random and compressible data
         for j in "${command_types[@]}"
         do
             test1_random_data "$i" "$j" $tbf_bulksync_rate_limit | tee $redis_benchmark_file
@@ -581,7 +589,7 @@ function run_no_limit_test() {
 
         for j in "${command_types[@]}"
         do
-            test2_compressable_data "$i" "$j" $tbf_bulksync_rate_limit | tee $redis_benchmark_file
+            test2_compressible_data "$i" "$j" $tbf_bulksync_rate_limit | tee $redis_benchmark_file
         done
         test3_real_data "$i" "real" "mset" $tbf_bulksync_rate_limit | tee $redis_benchmark_file
         test3_real_data "$i" "real" "set"  "200mbit" | tee $redis_benchmark_file #set is slow, reduce rate limit.

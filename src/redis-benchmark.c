@@ -38,6 +38,7 @@
 #include <errno.h>
 #include <time.h>
 #include <sys/time.h>
+//#include <sys/random.h>
 #include <signal.h>
 #include <assert.h>
 #include <math.h>
@@ -94,7 +95,7 @@ static struct config {
     int last_printed_bytes;
     long long previous_tick;
     int keysize;
-    int datasize;
+    size_t datasize;
     char **data;     //have a pointer to data array so that we do not call malloc too many times
     int randomdata; //enable disable random data. if random data is disabled it will generate only 'aaaaaaaaaa' string of datasize len
     int randomkeys;
@@ -725,7 +726,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             free(cmd);
         }
         if (config.diff_value_random && test_is_selected("set")) {
-            len = redisFormatCommand(&cmd,"SET key:__rand_int__ %s",config.data[requests_issued]);
+            len = redisFormatCommand(&cmd,"SET key:__rand_int__ %b",config.data[requests_issued], config.datasize);
 
             c->obuf = sdsempty();
             c->obuf = sdscatlen(c->obuf,cmd,len);
@@ -734,18 +735,37 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         }
 
         if (config.diff_value_random && test_is_selected("mset")) {
-            const char *cmd_argv[21];
+            const char *cmd_argv[21];  
+            //This is needed because we now send binary data 
+            int len_v[21];
+
             cmd_argv[0] = "MSET";
+            len_v[0] = 4; 
             sds key_placeholder = sdscatprintf(sdsnew(""),"key:__rand_int__");
+            size_t key_placehorder_len = sdslen(key_placeholder);
             for (int i = 1; i < 21; i += 2) {
-
                 cmd_argv[i] = key_placeholder;
+                len_v[i] = key_placehorder_len;
                 cmd_argv[i+1] = config.data[10 * requests_issued + i / 2]; //todo: div might be too slow.
-
+                len_v[i+1] = config.datasize;
                 //printf("[%d]\n", 10 * requests_issued + i / 2, config.data[10 * requests_issued + i / 2]);
             }
-            len = redisFormatCommandArgv(&cmd,21,cmd_argv,NULL);
+            //len = redisFormatCommandArgv(&cmd,21,cmd_argv,len_v);
 
+            len = redisFormatCommand(&cmd, "MSET %s %b %s %b %s %b %s %b %s %b \
+                                                %s %b %s %b %s %b %s %b %s %b",
+                                            key_placeholder, config.data[10 * requests_issued],     config.datasize,
+                                            key_placeholder, config.data[10 * requests_issued + 1], config.datasize,
+                                            key_placeholder, config.data[10 * requests_issued + 2], config.datasize,
+                                            key_placeholder, config.data[10 * requests_issued + 3], config.datasize,
+                                            key_placeholder, config.data[10 * requests_issued + 4], config.datasize,
+                                            key_placeholder, config.data[10 * requests_issued + 5], config.datasize,
+                                            key_placeholder, config.data[10 * requests_issued + 6], config.datasize,
+                                            key_placeholder, config.data[10 * requests_issued + 7], config.datasize,
+                                            key_placeholder, config.data[10 * requests_issued + 8], config.datasize,
+                                            key_placeholder, config.data[10 * requests_issued + 9], config.datasize);
+            
+            //printf("len %d\n", len);
             c->obuf = sdsempty();
             c->obuf = sdscatlen(c->obuf,cmd,len);
             put_random_keys(c);
@@ -755,7 +775,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         }
 
         if (config.diff_value_random && test_is_selected("hset")) {
-            len = redisFormatCommand(&cmd, "HSET myhash element:__rand_int__ %s", config.data[requests_issued]);
+            len = redisFormatCommand(&cmd, "HSET myhash element:__rand_int__ %b", config.data[requests_issued], config.datasize);
 
             c->obuf = sdsempty();
             c->obuf = sdscatlen(c->obuf,cmd,len);
@@ -2405,14 +2425,19 @@ int main(int argc, const char **argv) {
             if (test_is_selected("mset")) {
                 num_commands = config.requests * 10;
             }
+            FILE *fp;
+            fp = fopen("/dev/urandom", "r");
             config.data = zmalloc(num_commands * sizeof(char*));
             for (int i = 0; i < num_commands; ++i) {
-                config.data[i] = zmalloc(config.datasize+1);
+                config.data[i] = zmalloc(config.datasize);
 
-                genBenchmarkRandomData(config.data[i], config.datasize);
-                config.data[i][config.datasize] = '\0';
-                //printf ("%s\n\n", config.data[i]);
+                int ret = fread(config.data[i], 1, config.datasize, fp);
+                if (ret != config.datasize) {
+                    printf("error ret %d != %d requested size\n", ret, config.datasize);
+                    exit(1);
+                }
             }
+            fclose(fp);
             wait_send_signal();
         }
 
