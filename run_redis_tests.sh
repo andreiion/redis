@@ -20,8 +20,8 @@ declare -a compression_types=("no" "lzf" "lz4" "zstd")
 #declare -a compression_types=("lzf")
 
 #"mset" "sadd"
-declare -a command_types=("set" "mset" "hset")
-#declare -a command_types=("mset")
+#declare -a command_types=("set" "mset" "hset")
+declare -a command_types=("mset")
 
 declare -a data_types=("real" "random" "compressible")
 #declare -a data_types=("random")
@@ -71,30 +71,12 @@ logdata() {
     printf '%s\"%s\": \"%s\",\n' "$log_depth" $name "$value" >> $log_file_name
 }
 
-function start_profile_bpfcc()
-{
-    local container_id=$1
-    sudo docker exec --privileged $container_id /bin/bash -c 'profile-bpfcc -F 999 -adf --pid $(pgrep -o redis-server) > out.profile-folded' &
-}
-
-function export_profile_bpfcc()
-{
-    local container_id=$1
-    local cmp_type=$2
-    local data_type=$3
-
-    sudo docker exec $container_id /bin/bash -c 'kill -SIGTERM $(pgrep profile-bpfcc)'
-    sudo docker exec $container_id /bin/bash -c 'while kill -0 $(pgrep profile-bpfcc) >/dev/null 2>&1; do sleep 1; done' #wait for proc to finish. can't do wait because perf started in another bash
-
-    sudo docker cp $container_id:/out.profile-folded ~/${container_id}_profile.data
-
-    sudo ~/FlameGraph/flamegraph.pl --colors=java ~/${container_id}_profile.data > ${container_id}_${cmp_type}_${data_type}_profile.svg
-}
-
 function start_perf() {
     local container_id=$1
     echo "start perf $container_id"
-    sudo docker exec --privileged $container_id /bin/bash -c '/usr/bin/perf record -o perf.data -g --pid $(pgrep -w redis-server -d, ) -F 999 -- sleep 240 ' &
+    sudo docker exec --privileged $container_id /bin/bash -c '/usr/bin/perf record -o perf_record.data -g --pid $(pgrep -w redis-server -d, ) -F 999 -- sleep 240 ' &
+
+    sudo docker exec --privileged $container_id /bin/bash -c '/usr/bin/perf stat record --pid $(pgrep -w redis-server -d, ) -o perf_stat' &
 }
 
 function export_perf() {
@@ -103,13 +85,24 @@ function export_perf() {
     local data_type=$3
     local command_type=$4
     echo "kill perf for $container_id $cmp_type $data_type"
-    sudo docker exec $container_id /bin/bash -c 'kill -SIGTERM $(pidof perf)'
+    sudo docker exec $container_id /bin/bash -c 'kill -SIGINT $(pidof perf)'
     sudo docker exec $container_id /bin/bash -c 'while kill -0 $(pgrep perf) >/dev/null 2>&1; do sleep 1; done' #wait for proc to finish. can't do wait because perf started in another bash
-    sudo docker exec $container_id /bin/bash -c 'perf script --input /perf.data > redis.perf.stacks'
+    sudo docker exec $container_id /bin/bash -c 'perf script --input /perf_record.data > redis.perf.stacks'
+    sudo docker exec $container_id /bin/bash -c 'perf script -i perf_stat.out > perf_stat_script.out'
     sudo docker cp $container_id:/redis.perf.stacks ~/${container_id}_perf.stacks
-
+    
     ~/FlameGraph/stackcollapse-perf.pl ~/${container_id}_perf.stacks > ${container_id}_out.perf-folded
     sudo ~/FlameGraph/flamegraph.pl ${container_id}_out.perf-folded > ${container_id}_${cmp_type}_${data_type}_${command_type}.svg
+
+
+    perf script -i perf.out > perf-script.out
+    sudo docker cp $container_id:/perf_stat_script.out ~/${container_id}_perf_stat_script.out
+    local page_faults=$(cat ${container_id}_perf_stat_script.out | grep page-faults | awk '{sum+=$3} END {print sum}' | tr -d '\n\r')
+    echo "Page-faults $page_faults"
+
+    #  perf-script.out | grep page-fault |  awk '{sum+=$3} END {print sum}' | less
+    logdata "page-faults" "${page_faults}" 1
+    
 }
 
 function set_redis_compression_type() {
@@ -171,7 +164,7 @@ function get_bgsave_close_time() {
 function wait_master_replica_online_sync() {
     #echo "-wait for offsets to be synced $(get_replica_offset):$(get_master_offset)"
     while [ "$(get_replica_offset)" != "$(get_master_offset)" ]; do
-        sleep 1
+        sleep 0.2
     done
 
 }
@@ -179,19 +172,23 @@ function wait_master_replica_online_sync() {
 function wait_master_replica_online_sync_log() {
     #echo "-wait for offsets to be synced $(get_replica_offset):$(get_master_offset)"
     START_ONLINE="$(date +%s)"
+    START_ONLINE_MSEC="$(date +%s%3N)"
     while [ "$(get_replica_offset)" != "$(get_master_offset)" ]; do
-        sleep 0.1
+        sleep 0.01
     done
     DURATION_ONLINE=$[ $(date +%s) - ${START_ONLINE} ]
+    #DURATION_ONLINE_MSEC= $[ $(date +%s3%N) - ${START_ONLINE_MSEC}]
+    DURATION_ONLINE_MSEC=$(( $(date +%s%3N) - $START_ONLINE_MSEC ))
     echo "online offset sync finished in ${DURATION_ONLINE} sec"
     logdata "online-sync-duration" ${DURATION_ONLINE} 1
+    logdata "online-sync-duration-msec" ${DURATION_ONLINE_MSEC} 1
 }
 
 function wait_replica_bgsave() {
     #echo "-bulk sync ongoing $(get_slave_state)"
     START="$(date +%s)"
     while [ "$(get_slave_state)" != "online" ]; do
-        sleep 1
+        sleep 0.01
     done
     DURATION=$[ $(date +%s) - ${START} ]
     echo "-bulk sync finished in ${DURATION} sec"
@@ -392,9 +389,9 @@ function test1_random_data() {
     wait_master_replica_online_sync_log
 
     logdata "end-test-time" "$(date)" 1
-    extract_latency
+    
     export_perf "redis_6379" $cmp_type "random"  $command_type
-
+    extract_latency
     logdata "}," "" 1
 }
 
@@ -437,9 +434,9 @@ function test2_compressible_data() {
     wait_master_replica_online_sync_log
 
     logdata "end-test-time" "$(date)" 1
-    extract_latency
+    
     export_perf "redis_6379" $cmp_type "compressible" $command_type
-
+    extract_latency
     logdata "}," "" 1
 }
 
@@ -479,9 +476,9 @@ function test3_real_data() {
     wait_master_replica_online_sync_log
 
     logdata "end-test-time" "$(date)" 1
-    extract_latency
-    export_perf "redis_6379" $cmp_type $data_type $command_type
 
+    export_perf "redis_6379" $cmp_type $data_type $command_type
+    extract_latency
     logdata "}," "" 1
 }
 

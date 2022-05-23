@@ -97,6 +97,7 @@ static struct config {
     int keysize;
     size_t datasize;
     char **data;     //have a pointer to data array so that we do not call malloc too many times
+    char **key_data;
     int randomdata; //enable disable random data. if random data is disabled it will generate only 'aaaaaaaaaa' string of datasize len
     int randomkeys;
     int randomkeys_keyspacelen;
@@ -215,6 +216,8 @@ static int fetchClusterSlotsConfiguration(client c);
 static void updateClusterSlotsConfiguration();
 int showThroughput(struct aeEventLoop *eventLoop, long long id,
                    void *clientData);
+
+int test_is_selected(char *name);
 
 static sds benchmarkVersion(void) {
     sds version;
@@ -443,6 +446,40 @@ static void resetClient(client c) {
     c->pending = config.pipeline;
 }
 
+void put_random_keys(client c) {
+    if (config.randomkeys) {
+        char *p = c->obuf;
+
+        c->randlen = 0;
+        c->randfree = RANDPTR_INITIAL_SIZE;
+        c->randptr = zmalloc(sizeof(char *) * c->randfree);
+        while ((p = strstr(p, "__rand_int__")) != NULL) {
+          if (c->randfree == 0) {
+            c->randptr = zrealloc(c->randptr, sizeof(char *) * c->randlen * 2);
+            c->randfree += c->randlen;
+          }
+          c->randptr[c->randlen++] = p;
+          c->randfree--;
+          p += 12; /* 12 is strlen("__rand_int__). */
+        }
+
+        while ((p = strstr(p, "__rand_int__")) != NULL) {
+          if (c->randfree == 0) {
+            c->randptr = zrealloc(c->randptr, sizeof(char *) * c->randlen * 2);
+            c->randfree += c->randlen;
+          }
+          c->randptr[c->randlen++] = p;
+          c->randfree--;
+          p += 12; /* 12 is strlen("__rand_int__). */
+        }
+    }
+
+    if (test_is_selected("mset")) {
+        //printf("buffer: %s\n", c->obuf);
+        printf("Randlen %d\n", c->randlen);
+    }
+}
+
 static void randomizeClientKey(client c) {
     size_t i;
 
@@ -459,6 +496,17 @@ static void randomizeClientKey(client c) {
             p--;
         }
     }
+    
+    if (test_is_selected("mset")) {
+        printf("random keys: \n");
+
+        for (i = 0; i < c->randlen; ++i) {
+            printf("%.12s, ", c->randptr[i]);
+        }
+
+        printf("\n");
+    }
+
 }
 
 static void setClusterKeyHashTag(client c) {
@@ -683,25 +731,6 @@ static inline void genBenchmarkRandomData(char *data, int count) {
     }
 }
 
-void put_random_keys(client c) {
-    if (config.randomkeys) {
-        char *p = c->obuf;
-
-        c->randlen = 0;
-        c->randfree = RANDPTR_INITIAL_SIZE;
-        c->randptr = zmalloc(sizeof(char *) * c->randfree);
-        while ((p = strstr(p, "__rand_int__")) != NULL) {
-          if (c->randfree == 0) {
-            c->randptr = zrealloc(c->randptr, sizeof(char *) * c->randlen * 2);
-            c->randfree += c->randlen;
-          }
-          c->randptr[c->randlen++] = p;
-          c->randfree--;
-          p += 12; /* 12 is strlen("__rand_int__). */
-        }
-    }
-}
-
 static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     client c = privdata;
     UNUSED(el);
@@ -743,32 +772,24 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             len_v[0] = 4; 
             sds key_placeholder = sdscatprintf(sdsnew(""),"key:__rand_int__");
             size_t key_placehorder_len = sdslen(key_placeholder);
-            for (int i = 1; i < 21; i += 2) {
-                cmd_argv[i] = key_placeholder;
-                len_v[i] = key_placehorder_len;
-                cmd_argv[i+1] = config.data[10 * requests_issued + i / 2]; //todo: div might be too slow.
-                len_v[i+1] = config.datasize;
-                //printf("[%d]\n", 10 * requests_issued + i / 2, config.data[10 * requests_issued + i / 2]);
-            }
-            //len = redisFormatCommandArgv(&cmd,21,cmd_argv,len_v);
 
             len = redisFormatCommand(&cmd, "MSET %s %b %s %b %s %b %s %b %s %b \
                                                 %s %b %s %b %s %b %s %b %s %b",
-                                            key_placeholder, config.data[10 * requests_issued],     config.datasize,
-                                            key_placeholder, config.data[10 * requests_issued + 1], config.datasize,
-                                            key_placeholder, config.data[10 * requests_issued + 2], config.datasize,
-                                            key_placeholder, config.data[10 * requests_issued + 3], config.datasize,
-                                            key_placeholder, config.data[10 * requests_issued + 4], config.datasize,
-                                            key_placeholder, config.data[10 * requests_issued + 5], config.datasize,
-                                            key_placeholder, config.data[10 * requests_issued + 6], config.datasize,
-                                            key_placeholder, config.data[10 * requests_issued + 7], config.datasize,
-                                            key_placeholder, config.data[10 * requests_issued + 8], config.datasize,
-                                            key_placeholder, config.data[10 * requests_issued + 9], config.datasize);
+                                            config.key_data[10 * requests_issued], config.data[10 * requests_issued],     config.datasize,
+                                            config.key_data[10 * requests_issued + 1], config.data[10 * requests_issued + 1], config.datasize,
+                                            config.key_data[10 * requests_issued + 2], config.data[10 * requests_issued + 2], config.datasize,
+                                            config.key_data[10 * requests_issued + 3], config.data[10 * requests_issued + 3], config.datasize,
+                                            config.key_data[10 * requests_issued + 4], config.data[10 * requests_issued + 4], config.datasize,
+                                            config.key_data[10 * requests_issued + 5], config.data[10 * requests_issued + 5], config.datasize,
+                                            config.key_data[10 * requests_issued + 6], config.data[10 * requests_issued + 6], config.datasize,
+                                            config.key_data[10 * requests_issued + 7], config.data[10 * requests_issued + 7], config.datasize,
+                                            config.key_data[10 * requests_issued + 8], config.data[10 * requests_issued + 8], config.datasize,
+                                            config.key_data[10 * requests_issued + 9], config.data[10 * requests_issued + 9], config.datasize);
             
             //printf("len %d\n", len);
             c->obuf = sdsempty();
             c->obuf = sdscatlen(c->obuf,cmd,len);
-            put_random_keys(c);
+            //put_random_keys(c);
 
             free(cmd);
             sdsfree(key_placeholder);
@@ -787,7 +808,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         //freeReplyObject(config.val_reply[requests_issued]);
 
         /* Really initialize: randomize keys and set start time. */
-        if (config.randomkeys) randomizeClientKey(c);
+        if (config.randomkeys && !(config.diff_value_random && test_is_selected("mset"))) randomizeClientKey(c);
         if (config.cluster_mode && c->staglen > 0) setClusterKeyHashTag(c);
         atomicGet(config.slots_last_update, c->slots_last_update);
         c->start = ustime();
@@ -2428,13 +2449,28 @@ int main(int argc, const char **argv) {
             FILE *fp;
             fp = fopen("/dev/urandom", "r");
             config.data = zmalloc(num_commands * sizeof(char*));
+            config.key_data = zmalloc(num_commands * sizeof(char*));
+            
             for (int i = 0; i < num_commands; ++i) {
                 config.data[i] = zmalloc(config.datasize);
+                config.key_data[i] = zmalloc(12);
 
                 int ret = fread(config.data[i], 1, config.datasize, fp);
                 if (ret != config.datasize) {
                     printf("error ret %d != %d requested size\n", ret, config.datasize);
                     exit(1);
+                }
+
+                char *p = config.key_data[i]+11;
+                size_t r = 0;
+                if (config.randomkeys_keyspacelen != 0)
+                    r = random() % config.randomkeys_keyspacelen;
+                size_t j;
+
+                for (j = 0; j < 12; j++) {
+                    *p = '0'+r%10;
+                    r/=10;
+                    p--;
                 }
             }
             fclose(fp);
