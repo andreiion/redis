@@ -12,16 +12,16 @@ tbf_bulksync_rate_limit="250mbit"
 
 #real_data_test="real_data_string_mset"
 log_date=`date +%Y:%m:%d:%H:%M`
-log_file_name="log_$log_date.txt"
-
+#log_file_name="log_$log_date.txt"
+log_file_name="log_avg_$log_date.txt"
 redis_benchmark_file="redis-benchmark.out"
 
 declare -a compression_types=("no" "lzf" "lz4" "zstd")
 #declare -a compression_types=("lzf")
 
 #"mset" "sadd"
-#declare -a command_types=("set" "mset" "hset")
-declare -a command_types=("mset")
+declare -a command_types=("set" "mset" "hset")
+#declare -a command_types=("mset")
 
 declare -a data_types=("real" "random" "compressible")
 #declare -a data_types=("random")
@@ -76,7 +76,7 @@ function start_perf() {
     echo "start perf $container_id"
     sudo docker exec --privileged $container_id /bin/bash -c '/usr/bin/perf record -o perf_record.data -g --pid $(pgrep -w redis-server -d, ) -F 999 -- sleep 240 ' &
 
-    sudo docker exec --privileged $container_id /bin/bash -c '/usr/bin/perf stat record --pid $(pgrep -w redis-server -d, ) -o perf_stat' &
+    sudo docker exec --privileged $container_id /bin/bash -c '/usr/bin/perf stat record --pid $(pgrep -w redis-server -d, ) -o perf_stat.out' &
 }
 
 function export_perf() {
@@ -94,13 +94,10 @@ function export_perf() {
     ~/FlameGraph/stackcollapse-perf.pl ~/${container_id}_perf.stacks > ${container_id}_out.perf-folded
     sudo ~/FlameGraph/flamegraph.pl ${container_id}_out.perf-folded > ${container_id}_${cmp_type}_${data_type}_${command_type}.svg
 
-
-    perf script -i perf.out > perf-script.out
     sudo docker cp $container_id:/perf_stat_script.out ~/${container_id}_perf_stat_script.out
     local page_faults=$(cat ${container_id}_perf_stat_script.out | grep page-faults | awk '{sum+=$3} END {print sum}' | tr -d '\n\r')
-    echo "Page-faults $page_faults"
 
-    #  perf-script.out | grep page-fault |  awk '{sum+=$3} END {print sum}' | less
+    echo "Page-faults $page_faults"
     logdata "page-faults" "${page_faults}" 1
     
 }
@@ -670,12 +667,15 @@ function run_tests() {
 
 main () {
     buffer_limit_flag=0
-    while getopts 'l' name
+    while getopts 'lr:' name
     do
         case $name in
         l)
             buffer_limit_flag=1
             bval="$OPTARG"
+            ;;
+        r)
+            num_iter="$OPTARG"
             ;;
         ?)
             printf "Usage: %s: [-b value] args\n" $0
@@ -686,8 +686,13 @@ main () {
 
     START_TEST="$(date +%s)"
     if [ $buffer_limit_flag -eq 0 ]; then
-        run_no_limit_test
+        for (( i=1; i <= $num_iter; i++ ));
+        do
+            #echo "run test $i"
+            run_no_limit_test
+        done 
     else
+    
         run_tests
     fi
     DURATION_TEST=$[ $(date +%s) - ${START_TEST} ]
